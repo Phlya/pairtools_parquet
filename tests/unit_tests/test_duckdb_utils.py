@@ -5,7 +5,7 @@ import duckdb
 import pyarrow as pa
 from unittest.mock import MagicMock, patch
 
-from pairs_to_parquet.lib.duckdb_utils import (
+from pairtools_parquet.lib.duckdb_utils import (
     setup_duckdb_connection,
     setup_duckdb_types,
     classify_column_types_by_name,
@@ -82,7 +82,7 @@ def test_decode_parquet_metadata_duckdb_as_dict(monkeypatch):
         "value": ['["a", "b"]', '"triangular"']
     })
     # Mock json_transform.decode_and_parse_json to just json.loads
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.json_transform.decode_and_parse_json", json.loads)
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.json_transform.decode_and_parse_json", json.loads)
     result = decode_parquet_metadata_duckdb_as_dict(df)
     assert result["columns"] == ["a", "b"]
     assert result["shape"] == "triangular"
@@ -94,9 +94,9 @@ def test_decode_parquet_metadata_duckdb_as_dict(monkeypatch):
 def test_header_to_kv_metadata(monkeypatch):
     mock_header = ["## columns: a b c"]
     # Mock both dependencies
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.header_metadata.extract_field_names", lambda h: ["columns"])
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.json_transform.header_to_json_dict", lambda h, f: {"columns": '["a","b","c"]'})
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.json_transform.json_dict_to_json_str", lambda d: {"columns": '["a","b","c"]'})
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.header_metadata.extract_field_names", lambda h: ["columns"])
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.json_transform.header_to_json_dict", lambda h, f: {"columns": '["a","b","c"]'})
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.json_transform.json_dict_to_json_str", lambda d: {"columns": '["a","b","c"]'})
 
     result = header_to_kv_metadata(mock_header)
     assert result == {"columns": '["a","b","c"]'}
@@ -107,9 +107,9 @@ def test_header_to_kv_metadata(monkeypatch):
 # --------------------------------------------------------------------
 def test_duckdb_kv_metadata_to_header(monkeypatch):
     fake_metadata_df = MagicMock(name="df")
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.extract_duckdb_metadata", lambda path, con: fake_metadata_df)
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.decode_parquet_metadata_duckdb_as_dict", lambda df: {"columns": ["a", "b"]})
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.header_metadata.metadata_dict_to_header_list", lambda d: ["#columns: a b"])
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.extract_duckdb_metadata", lambda path, con: fake_metadata_df)
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.decode_parquet_metadata_duckdb_as_dict", lambda df: {"columns": ["a", "b"]})
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.header_metadata.metadata_dict_to_header_list", lambda d: ["#columns: a b"])
 
     result = duckdb_kv_metadata_to_header("fake.parquet")
     assert result == ["#columns: a b"]
@@ -123,10 +123,10 @@ def test_write_parquet_to_csv(monkeypatch):
     table = pa.table({"x": [1, 2], "y": [3, 4]})
     iterator = [table]
     fake_write = MagicMock()
-    monkeypatch.setattr("pairs_to_parquet.lib.duckdb_utils.csv.write_csv", fake_write)
+    monkeypatch.setattr("pairtools_parquet.lib.duckdb_utils.csv.write_csv", fake_write)
 
     sink = io.StringIO()
-    from pairs_to_parquet.lib.duckdb_utils import write_parquet_to_csv
+    from pairtools_parquet.lib.duckdb_utils import write_parquet_to_csv
     write_parquet_to_csv(iterator, sink)
 
     fake_write.assert_called_once()

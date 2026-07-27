@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'pairs_to_parquet'
+project = 'pairtools_parquet'
 copyright = '2025, Ayaksvals'
 author = 'Ayaksvals'
 release = '0.2.0'

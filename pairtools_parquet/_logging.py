@@ -3,7 +3,7 @@ import logging
 _loggers = {}
 
 
-def get_logger(name="pairtools"):
+def get_logger(name="pairtools_parquet"):
     # Based on ipython traitlets
     # global _loggers
 

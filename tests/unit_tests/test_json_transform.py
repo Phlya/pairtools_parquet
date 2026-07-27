@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch
 
 from pairtools.lib import headerops
-from pairs_to_parquet.lib.json_transform import (
+from pairtools_parquet.lib.json_transform import (
     header_to_json_dict,
     json_dict_to_json_str,
     decode_and_parse_json,

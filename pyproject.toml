@@ -1,13 +1,14 @@
 [project]
-name = "pairs_to_parquet"
+name = "pairtools_parquet"
 version = "0.2.0"
 
 dependencies = [
     'click>=6.6',
-    'pairtools>=1.1.2', 
+    'pairtools>=1.1.2',
     'pyarrow>=17.0.0',
     'duckdb>=1.4.1',
-    'fire>=0.7.0'
+    'numpy',
+    'pandas',
 ]
 requires-python = ">=3.9"
 
@@ -63,9 +64,13 @@ Changelog = "https://github.com/ayaksvals/pairs_to_parquet/issues/blob/master/CH
 
 
 [project.scripts]
-pairs_to_parquet = "pairs_to_parquet.cli:cli"
+pairtools_parquet = "pairtools_parquet.cli:cli"
 
 
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+
+[tool.setuptools.packages.find]
+include = ["pairtools_parquet*"]

@@ -119,7 +119,7 @@ def run_select_parquet(
 ):
     """Execute the SELECT operation using DuckDB SQL."""
 
-    UTIL_NAME="pairs_to_parquet_select"
+    UTIL_NAME="pairtools_parquet_select"
 
     con = duckdb.connect()
     old_header=duckdb_utils.duckdb_kv_metadata_to_header(input_path, con)

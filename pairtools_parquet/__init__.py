@@ -1,6 +1,6 @@
 """
-pairs_to_parquet
-~~~~~~~~~
+pairtools_parquet
+~~~~~~~~~~~~~~~~~
 
 CLI tools to process mapped Hi-C data
 

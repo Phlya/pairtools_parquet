@@ -1,4 +1,4 @@
-.. pairs_to_parquet documentation master file, created by
+.. pairtools_parquet documentation master file, created by
    sphinx-quickstart on Fri Oct 24 13:37:25 2025.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
@@ -6,7 +6,7 @@
 Overview
 ==============================
 
-`pairs_to_parquet` is a .parquet extention of .pairs file format.
+`pairtools_parquet` is a .parquet extention of .pairs file format.
 
 The main purpose of this extension is to leverage the row groups and metadata features of the Parquet format in order to:
 
@@ -41,5 +41,5 @@ Here is, how the process is organised:
    :caption: Tutorials
 
    tutorials/sort.ipynb
-   tutorials/pairs_to_parquet.ipynb
+   tutorials/pairtools_parquet.ipynb
    tutorials/parquet_to_pairs.ipynb

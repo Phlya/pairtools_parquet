@@ -1,5 +1,5 @@
 import pytest
-from pairs_to_parquet.lib.header_metadata import (
+from pairtools_parquet.lib.header_metadata import (
     extract_field_names,
     extract_sorted_chromosome_field,
     metadata_dict_to_header_list,

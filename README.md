@@ -1,4 +1,4 @@
-# pairs_to_parquet
+# pairtools_parquet
 
 [![Documentation Status](https://readthedocs.org/projects/pairs_to_parquet/badge/?version=latest)](https://pairs-to-parquet.readthedocs.io/en/latest/)
 [![Join the chat on Slack](https://img.shields.io/badge/chat-slack-%233F0F3F?logo=slack)](https://bit.ly/2UaOpAe)
@@ -6,7 +6,7 @@
 
 ## Transform 3D contacts (.pairs) to parquet & process them
 
-`pairs_to_parquet` is a .parquet extention of .pairs file format.
+`pairtools_parquet` is a .parquet extention of .pairs file format.
 
 The main purpose of this extension is to leverage the row groups and metadata features of the Parquet format in order to:
 
@@ -39,13 +39,13 @@ For more information, see [parquet metadata](https://duckdb.org/docs/stable/data
 Requirements:
 - Python 3.x
 
-Currently there is only 1 option for installing `pairs_to_parquet`:
+Currently there is only 1 option for installing `pairtools_parquet`:
 
-And it is the same, when you want to modify `pairs_to_parquet`: build `pairs_to_parquet` from source via pip's "editable" mode:
+And it is the same, when you want to modify `pairtools_parquet`: build `pairtools_parquet` from source via pip's "editable" mode:
 
 ```sh
 $ git clone https://github.com/ayaksvals/pairs_to_parquet
-$ cd pairs_to_parquet
+$ cd pairtools_parquet
 $ pip install -e .
 ```
 
@@ -66,13 +66,13 @@ If we use the same 2.4 GB file, 35 GB of memory, 4 threads:
 | Tool, input & output formats          | Memory (2.4GB)| real time | user time | sys time  |                              Comments                                 |
 |---------------------------------------|---------------|-----------|-----------|-----------|-----------------------------------------------------------------------|
 | Pairtools sort                        |     2.3GB     | 10min 10s | 20min 23s | 3min 14s  |                                                                       |
-| pairs_to_parquet csv-parquet sort     |     2.5GB     | 2min  24s | 6min  56s | 0min 47s  | 5x times faster in real time, 3x times faster in user time            |
-| pairs_to_parquet parquet-parquet sort |     2.6GB     | 2min  33s | 6min  18s | 2m   6s   | also a major speed up                                                 |
-| pairs_to_parquet csv-csv sort         |     2.2GB     | 4mim  39s | 15min 55s | 0min 53s  | worse, that first 2; better, than pairtools sort; better compression  |
-| pairs_to_parquet parquet-csv sort     |     2.6GB     | 5min  15s | 14min 10s | 1m   56s  | worse, that first 2, but still better, than pairtools sort            |
+| pairtools_parquet csv-parquet sort     |     2.5GB     | 2min  24s | 6min  56s | 0min 47s  | 5x times faster in real time, 3x times faster in user time            |
+| pairtools_parquet parquet-parquet sort |     2.6GB     | 2min  33s | 6min  18s | 2m   6s   | also a major speed up                                                 |
+| pairtools_parquet csv-csv sort         |     2.2GB     | 4mim  39s | 15min 55s | 0min 53s  | worse, that first 2; better, than pairtools sort; better compression  |
+| pairtools_parquet parquet-csv sort     |     2.6GB     | 5min  15s | 14min 10s | 1m   56s  | worse, that first 2, but still better, than pairtools sort            |
 
-So pairs_to_parquet with any input and output format will outperform pairtools sort on csv. Here csv-parquet and parquet-parquet show the best results. 
-Spoiler alert: on bigger files, like 10GB compressed, the difference feels even more dramatic. pairtools sort ~25 min, pairs_to_parquet sort csv-parquet ~12 minutes. 
+So pairtools_parquet with any input and output format will outperform pairtools sort on csv. Here csv-parquet and parquet-parquet show the best results. 
+Spoiler alert: on bigger files, like 10GB compressed, the difference feels even more dramatic. pairtools sort ~25 min, pairtools_parquet sort csv-parquet ~12 minutes. 
 
 Working directly with Parquet files (parquet → parquet sort) delivers performance close to the best case, confirming that the Parquet format maintains efficiency across repeated operations.
 

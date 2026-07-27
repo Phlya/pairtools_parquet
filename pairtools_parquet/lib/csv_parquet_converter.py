@@ -4,7 +4,6 @@ import copy
 import subprocess
 import sys
 import json
-import fire
 import time
 from itertools import product
 import shutil
@@ -113,7 +112,7 @@ def duckdb_read_query_write(
     enable_profiling: str = 'no_output',
     numb_threads: int = 16,
     compress_program: str = "pigz",
-    UTIL_NAME: str="pairs_to_parquet",
+    UTIL_NAME: str="pairtools_parquet",
     **kwargs
     ):
 
@@ -178,7 +177,3 @@ def duckdb_read_query_write(
         kv_metadata = duckdb_utils.header_to_kv_metadata(new_header)
         query = f""" COPY ( {query} ) TO '{output_path}' (FORMAT PARQUET, KV_METADATA {kv_metadata});"""
         con.execute(query)
-
-
-if __name__ == "__main__":
-        fire.Fire()

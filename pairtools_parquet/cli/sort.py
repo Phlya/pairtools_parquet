@@ -179,7 +179,7 @@ def sort_py(input_path,
     sort_keys=csv_parquet_converter.resolve_keys(user_columns_to_sort, column_names)
     query=duckdb_utils.sort_query(sort_keys)
 
-    csv_parquet_converter.duckdb_read_query_write(input_path, output_path, query, tmpdir, memory, numb_threads=nproc, compress_program=compress_program, UTIL_NAME="pairs_to_parquet_sort")
+    csv_parquet_converter.duckdb_read_query_write(input_path, output_path, query, tmpdir, memory, numb_threads=nproc, compress_program=compress_program, UTIL_NAME="pairtools_parquet_sort")
     
 if __name__ == "__main__":
     sort()

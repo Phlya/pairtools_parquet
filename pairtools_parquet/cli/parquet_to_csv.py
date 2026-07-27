@@ -89,7 +89,7 @@ def parquet_to_csv_py(input_path,
 
     query=None
 
-    csv_parquet_converter.duckdb_read_query_write(input_path, output_path, query, tmpdir, memory, numb_threads=nproc, compress_program=compress_program, UTIL_NAME="pairs_to_parquet_parquet_to_csv")
+    csv_parquet_converter.duckdb_read_query_write(input_path, output_path, query, tmpdir, memory, numb_threads=nproc, compress_program=compress_program, UTIL_NAME="pairtools_parquet_parquet_to_csv")
     
 if __name__ == "__main__":
     parquet_to_csv()

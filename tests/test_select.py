@@ -6,7 +6,7 @@ import pytest
 import pyarrow.parquet as pq
 from pairtools.lib import pairsam_format
 
-from pairs_to_parquet.lib.duckdb_utils import duckdb_kv_metadata_to_header
+from pairtools_parquet.lib.duckdb_utils import duckdb_kv_metadata_to_header
 
 testdir = os.path.dirname(os.path.realpath(__file__))
 mock_parquet_path = os.path.join(testdir, "data", "mock.parquet")
@@ -43,7 +43,7 @@ def test_preserve():
     mock_output_parquet_path = os.path.join(testdir, "data/select_results", "select_preserve_mock.parquet")
     try:
         result = subprocess.check_output(
-            ["python", "-m", "pairs_to_parquet", "select", "True", mock_parquet_path, "-o", mock_output_parquet_path],
+            ["python", "-m", "pairtools_parquet", "select", "True", mock_parquet_path, "-o", mock_output_parquet_path],
         )
     except subprocess.CalledProcessError as e:
         print(e.output)
@@ -61,7 +61,7 @@ def test_equal():
         result = subprocess.check_output(
             [
                 "python", "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 '(pair_type == "RU") or (pair_type == "UR") or (pair_type == "UU")',
                 mock_parquet_path,
@@ -89,7 +89,7 @@ def test_csv():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 'csv_match(pair_type, "RU,UR,UU")',
                 mock_parquet_path,
@@ -116,7 +116,7 @@ def test_wildcard():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 'wildcard_match(pair_type, "*U")',
                 mock_parquet_path,
@@ -146,7 +146,7 @@ def test_regex():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 'regex_match(pair_type, "[NM]U")',
                 mock_parquet_path,
@@ -175,7 +175,7 @@ def test_chrom_subset():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 "True",
                 "--chrom-subset",
@@ -210,7 +210,7 @@ def test_chrom_subset():
 def test_remove_columns():
     """Test removal of columns from the file
     Example run:
-    pairs_to_parquet select True --remove-columns sam1,sam2 tests/data/mock.parquet
+    pairtools_parquet select True --remove-columns sam1,sam2 tests/data/mock.parquet
     """
     mock_output_parquet_path = os.path.join(testdir, "data/select_results", "select_reove_columns_mock.parquet")
     
@@ -219,7 +219,7 @@ def test_remove_columns():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 "True",
                 "--remove-columns",
@@ -261,7 +261,7 @@ def test_region_match():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 'region_match(chrom1, pos1, "chr1", 0, 50)',
                 mock_parquet_path,
@@ -299,7 +299,7 @@ def test_region_match_no_end():
             [
                 "python",
                 "-m",
-                "pairs_to_parquet",
+                "pairtools_parquet",
                 "select",
                 'region_match(chrom1, pos1, "chr1", 50)',
                 mock_parquet_path,
