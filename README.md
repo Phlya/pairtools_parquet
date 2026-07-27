@@ -45,17 +45,19 @@ And it is the same, when you want to modify `pairtools_parquet`: build `pairtool
 
 ```sh
 $ git clone https://github.com/ayaksvals/pairs_to_parquet
-$ cd pairtools_parquet
+$ cd pairs_to_parquet
 $ pip install -e .
 ```
 
 ## Tools
 
-- `csv_to_parquet`: transform standard .pairs files into the optimized .parquet format for faster querying and reduced storage. Header of .pairs becomes key-value metadata in a new parquet file
+- `csv-to-parquet`: transform standard .pairs files into the optimized .parquet format for faster querying and reduced storage. Header of .pairs becomes key-value metadata in a new parquet file
 
-- `parquet_to_csv`: export Parquet data back into .pairs format for compatibility with existing pairtools pipelines.
+- `parquet-to-csv`: export Parquet data back into .pairs format for compatibility with existing pairtools pipelines.
 
 - `sort`: sort .pairs or .parquet files(the lexicographic order for chromosomes, the numeric order for the positions, the lexicographic order for pair types)
+
+- `select`: filter pairs by a `pairtools select`-style condition. Currently .parquet in, .parquet out.
 
 
 ## Why to use `.parquet` extention for sorting (and many more future processing tools)?

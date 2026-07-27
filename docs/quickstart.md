@@ -11,6 +11,6 @@ $ git clone https://github.com/ayaksvals/pairs_to_parquet
 Then, compile and install pairtools_parquet in [development mode](https://setuptools.readthedocs.io/en/latest/setuptools.html#development-mode). This installs the package without moving it to a system folder, and thus allows for testing changes to the python code on the fly.
 
 ```
-$ cd pairtools_parquet
+$ cd pairs_to_parquet
 $ pip install -e ./
 ```
