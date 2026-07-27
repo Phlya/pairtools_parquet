@@ -44,6 +44,27 @@ def run_cli(*args):
     return proc.stdout.decode()
 
 
+def run_pairtools(*args):
+    """Run a pairtools subcommand, for comparing our output against upstream."""
+    cmd = ["pairtools"] + [str(a) for a in args]
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0:
+        raise AssertionError(
+            "command failed: {}\n--- stdout ---\n{}\n--- stderr ---\n{}".format(
+                " ".join(cmd), proc.stdout.decode(), proc.stderr.decode()
+            )
+        )
+    return proc.stdout.decode()
+
+
+def write_pairs(path, header, rows):
+    """Write a small .pairs file from header lines and row tuples."""
+    with open(path, "w") as f:
+        f.write("".join(line + "\n" for line in header))
+        f.write("".join("\t".join(str(v) for v in row) + "\n" for row in rows))
+    return path
+
+
 def read_pairs_header(path):
     with open(path, "r") as f:
         return [l.strip() for l in f if l.startswith("#")]

@@ -1,0 +1,168 @@
+"""Bridging .pairs files into DuckDB and back out again.
+
+An operation that is expressible entirely in SQL -- sorting, filtering, merging
+-- should let DuckDB read and write the files itself: its readers and its
+Parquet writer are both parallel, whereas feeding batches through a Python
+generator serializes the scan and holds the GIL while doing it. Measured on 4M
+pairs, letting DuckDB own both ends is about 3x faster than streaming the same
+query through Arrow.
+
+Tools that need Python-side processing use :mod:`pairtools_parquet.lib.arrowio`
+instead; this module is for the ones that do not.
+"""
+
+from pairtools.lib import headerops, pairsam_format
+
+from . import arrowio, headerio
+from .schema import duckdb_types_from_columns
+
+
+def sql_string(value):
+    """Render a Python string as a DuckDB string literal."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def quote_identifier(name):
+    """Quote a column name for SQL, so a column called e.g. `order` is usable."""
+    return '"{}"'.format(str(name).replace('"', '""'))
+
+
+#: Columns whose domain the header declares, so they can be DuckDB ENUMs.
+CHROM_COLUMNS = ("chrom1", "chrom2")
+
+CHROM_ENUM = "PAIRS_CHROM"
+
+
+class EnumDomainError(Exception):
+    """A value fell outside a declared ENUM domain."""
+
+
+def declare_chrom_enum(con, header):
+    """Declare the chromosome ENUM for `header`, returning its name or None.
+
+    Comparing small integers rather than strings makes the sort roughly a third
+    faster, and chrom1/chrom2 are the leading sort keys.
+
+    The values are declared in lexicographic order, because DuckDB orders an
+    ENUM by declaration index and ``pairtools sort`` orders chromosomes by byte
+    value (it shells out to `sort` under LC_ALL=C). Declaring them in any other
+    order silently changes the sort -- which is exactly the bug this replaces,
+    where the pair_type ENUM was declared in itertools.product order and so
+    sorted tied pairs as UU before DD instead of DD before UU.
+    """
+    # extract_chromsizes returns a pandas Series keyed by chromosome, so the
+    # names are its keys -- iterating it would yield the sizes.
+    chromsizes = headerops.extract_chromsizes(header)
+    if chromsizes is None or len(chromsizes) == 0:
+        return None
+
+    values = sorted(set(chromsizes.keys()) | {pairsam_format.UNMAPPED_CHROM})
+    con.execute("DROP TYPE IF EXISTS {}".format(CHROM_ENUM))
+    con.execute(
+        "CREATE TYPE {} AS ENUM ({})".format(
+            CHROM_ENUM, ", ".join(sql_string(value) for value in values)
+        )
+    )
+    return CHROM_ENUM
+
+
+def is_enum_domain_error(error):
+    """Whether a DuckDB error is a value falling outside an ENUM domain.
+
+    A chromosome the header never declared is a conversion error, not a null,
+    so the caller has to retry without the ENUM rather than lose rows.
+    """
+    message = str(error)
+    return "Conversion Error" in message and "Could not convert string" in message
+
+
+def scan_sql(path, header, nproc_in=3, chrom_type=None):
+    """Return the SQL FROM-clause that reads `path` natively in DuckDB.
+
+    Raises ValueError for inputs DuckDB cannot open by path, e.g. stdin; the
+    caller should fall back to scanning an Arrow reader for those.
+    """
+    path = str(path)
+    if path == "-":
+        raise ValueError("DuckDB cannot read a .pairs stream from stdin by path")
+
+    columns = headerops.extract_column_names(header)
+
+    if arrowio.is_parquet(path):
+        scan = "read_parquet({})".format(sql_string(path))
+        if chrom_type is None:
+            return scan
+        # Parquet carries its own types, so the ENUM has to be applied on top.
+        projected = ", ".join(
+            "{col}::{type} AS {col}".format(col=quote_identifier(col), type=chrom_type)
+            if col in CHROM_COLUMNS
+            else quote_identifier(col)
+            for col in columns
+        )
+        return "(SELECT {} FROM {})".format(projected, scan)
+
+    if not columns:
+        raise ValueError(
+            "{} has no '#columns:' header line, so its columns are unknown".format(
+                path
+            )
+        )
+
+    column_types = duckdb_types_from_columns(columns)
+    if chrom_type is not None:
+        for col in CHROM_COLUMNS:
+            if col in column_types:
+                column_types[col] = chrom_type
+
+    # The header is skipped positionally: auto_detect would otherwise take the
+    # last header line for column names.
+    return (
+        "read_csv({path}, delim='\\t', skip={skip}, columns={columns}, "
+        "header=false, auto_detect=false)"
+    ).format(
+        path=sql_string(path),
+        skip=len(header),
+        columns=column_types,
+    )
+
+
+def can_scan_natively(path):
+    """Whether :func:`scan_sql` can handle `path`."""
+    path = str(path)
+    return path != "-" and (
+        arrowio.is_parquet(path)
+        or path.endswith((".pairs", ".pairs.gz", ".pairsam", ".pairsam.gz"))
+    )
+
+
+def kv_metadata_sql(header):
+    """Render a .pairs header as a DuckDB ``KV_METADATA`` literal.
+
+    Values are escaped as SQL string literals, so tabs, backslashes and quotes
+    inside a ``@PG`` record survive the round trip verbatim.
+    """
+    metadata = headerio.header_to_metadata(header)
+    return "{" + ", ".join(
+        "{}: {}".format(sql_string(key.decode("utf-8")), sql_string(value.decode("utf-8")))
+        for key, value in metadata.items()
+    ) + "}"
+
+
+def copy_to_parquet(con, query, output_path, header, row_group_size=None):
+    """Write the result of `query` to a Parquet file, header included."""
+    options = ["FORMAT PARQUET", "KV_METADATA {}".format(kv_metadata_sql(header))]
+    if row_group_size:
+        options.append("ROW_GROUP_SIZE {:d}".format(row_group_size))
+
+    con.execute(
+        "COPY ({query}) TO {path} ({options})".format(
+            query=query, path=sql_string(output_path), options=", ".join(options)
+        )
+    )
+
+
+def result_batches(result):
+    """Iterate a DuckDB result as Arrow record batches, across duckdb versions."""
+    if hasattr(result, "to_arrow_reader"):
+        return result.to_arrow_reader()
+    return result.fetch_record_batch()

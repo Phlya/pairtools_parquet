@@ -1,13 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import io
-import sys
 import click
 
 
-from pairtools.lib import fileio, pairsam_format, headerops
+from pairtools.lib import pairsam_format
 
-from ..lib import  duckdb_utils, json_transform, csv_parquet_converter
+from ..lib.sort import sort_pairs
 from . import cli, common_io_options
 
 
@@ -156,30 +154,16 @@ def sort_py(input_path,
     compress_program,
     **kwargs):
 
-    if input_path.endswith("gz") or input_path.endswith("pairs"):
-        instream = fileio.auto_open(
-            input_path,
-            mode="r",
-            nproc=kwargs.get("nproc_in", 1),
-            command=kwargs.get("cmd_in", None),
-        )
+    sort_pairs(
+        input_path,
+        output_path,
+        [c1, c2, p1, p2, pt] + list(extra_col),
+        nproc=nproc,
+        tmpdir=tmpdir,
+        memory=memory,
+        compress_program=compress_program,
+        **kwargs,
+    )
 
-        header, body_stream = headerops.get_header(instream)
-        
-        if instream != sys.stdin:
-            instream.close()
-
-
-    if input_path.endswith("parquet") or  input_path.endswith("pq"):
-        header=duckdb_utils.duckdb_kv_metadata_to_header(input_path)
-        
-
-    column_names = headerops.extract_column_names(header)
-    user_columns_to_sort = [c1, c2, p1, p2, pt] + list(extra_col)
-    sort_keys=csv_parquet_converter.resolve_keys(user_columns_to_sort, column_names)
-    query=duckdb_utils.sort_query(sort_keys)
-
-    csv_parquet_converter.duckdb_read_query_write(input_path, output_path, query, tmpdir, memory, numb_threads=nproc, compress_program=compress_program, UTIL_NAME="pairtools_parquet_sort")
-    
 if __name__ == "__main__":
     sort()
