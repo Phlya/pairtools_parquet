@@ -4,7 +4,36 @@
 ---
 
 ## [Unreleased]
+### Added
+- `lib/arrowio.py`, an Arrow record-batch I/O layer. Every tool reads and writes
+  through it, so `.pairs`, `.pairs.gz` and `.parquet` are interchangeable
+  wherever a path is accepted. A `.pairs` file round-trips through Parquet
+  byte-for-byte, header included.
+- `select` now reads and writes any of those formats, not just Parquet, and
+  gained `--startup-code` and `--compress-program`.
+- `tests/test_parity.py`, which runs each tool against real `pairtools` and
+  requires identical output.
+
 ### Changed
+- The header is now stored verbatim in Parquet under a `pairs_header` key, so
+  arbitrary and unknown header lines survive a round trip. The 0.2.0 keys are
+  still written, and files that have only those are still readable.
+- `select` evaluates its CONDITION with pairtools itself instead of translating
+  it to SQL, so the condition language is whatever pairtools supports.
+
+### Fixed
+- `sort` no longer reorders pairs tied on chrom1/chrom2/pos1/pos2. Chromosome,
+  strand and pair type were cast to DuckDB ENUMs, which order by declaration
+  index, and the pair-type ENUM was declared in `itertools.product` order — so
+  `UU` sorted before `DD` where pairtools puts `DD` first.
+- `sort` no longer aborts on a chromosome absent from the file's header.
+- `select` conditions that the SQL translation could not express now work:
+  Python method calls and chained comparisons raised, and `wildcard_match`
+  with a `?` silently matched nothing.
+- A `.pairs` file with a header and no data rows can be read, so an empty
+  `select` result can be fed to another tool.
+
+### Changed (breaking)
 - **Renamed the package from `pairs_to_parquet` to `pairtools_parquet`**, along
   with the CLI entry point and the `@PG` provenance records it writes. This is a
   breaking change for imports and for the command name.

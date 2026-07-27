@@ -57,7 +57,9 @@ $ pip install -e .
 
 - `sort`: sort .pairs or .parquet files(the lexicographic order for chromosomes, the numeric order for the positions, the lexicographic order for pair types)
 
-- `select`: filter pairs by a `pairtools select`-style condition. Currently .parquet in, .parquet out.
+- `select`: filter pairs by a `pairtools select` condition. The condition is evaluated by pairtools itself, so the full condition language works, including `--startup-code`.
+
+Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
 
 ## Why to use `.parquet` extention for sorting (and many more future processing tools)?

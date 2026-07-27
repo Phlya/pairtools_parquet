@@ -119,6 +119,154 @@ def test_sort_handles_chromosome_missing_from_header(tmp_path):
     assert read_pairs_body(reference) == read_pairs_body(ours)
 
 
+SELECT_CONDITIONS = [
+    'pair_type == "UU"',
+    '(pair_type == "RU") or (pair_type == "UR") or (pair_type == "UU")',
+    'csv_match(pair_type, "RU,UR,UU")',
+    'wildcard_match(pair_type, "*U")',
+    # '?' is fnmatch's single-character wildcard. The SQL translation this
+    # replaces passed it through to LIKE, where it is a literal, and so
+    # silently selected nothing.
+    'wildcard_match(chrom1, "chr?")',
+    'regex_match(chrom1, "chr[0-9]+")',
+    "chrom1 == chrom2",
+    "chrom1 == chrom2 and abs(pos1 - pos2) < 10",
+    'not (pair_type == "UU")',
+    'pair_type in ("UU", "DD")',
+    # a Python method call: no SQL translation of the condition language can
+    # express this, which is why the condition is evaluated by pairtools
+    'readID.endswith("9")',
+    "pos1 < pos2 < 100",
+]
+
+
+@pytest.mark.parametrize("condition", SELECT_CONDITIONS)
+def test_select_matches_pairtools(tmp_path, mock_pairs_path, condition):
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.pairs"
+
+    run_pairtools("select", condition, "-o", reference, mock_pairs_path)
+    run_cli(
+        "select", condition, mock_pairs_path, "-o", ours, "--compress-program", "none"
+    )
+
+    assert read_pairs_body(reference) == read_pairs_body(ours)
+
+
+@pytest.mark.parametrize("condition", SELECT_CONDITIONS)
+def test_select_matches_pairtools_via_parquet(tmp_path, mock_pairs_path, condition):
+    """Selecting from Parquet must give the same rows as selecting from text."""
+    reference = tmp_path / "ref.pairs"
+    as_parquet = tmp_path / "in.parquet"
+    ours = tmp_path / "ours.parquet"
+
+    run_pairtools("select", condition, "-o", reference, mock_pairs_path)
+    run_cli("csv-to-parquet", "-o", as_parquet, mock_pairs_path)
+    run_cli("select", condition, as_parquet, "-o", ours)
+
+    assert read_pairs_body(reference) == read_parquet_body(ours)
+
+
+def test_select_string_literal_containing_operator_words(tmp_path):
+    """A string literal in CONDITION must not be rewritten.
+
+    The SQL translation this replaces uppercased ' and ' / ' or ' everywhere in
+    the condition, including inside quoted values, turning a readID of
+    "a and b" into a comparison against 'a AND b'.
+    """
+    header = [
+        "## pairs format v1.0.0",
+        "#chromsize: chr1 1000",
+        "#columns: readID chrom1 pos1 chrom2 pos2 strand1 strand2 pair_type",
+    ]
+    rows = [
+        ("a and b", "chr1", 1, "chr1", 2, "+", "+", "UU"),
+        ("a AND b", "chr1", 3, "chr1", 4, "+", "+", "UU"),
+        ("plain", "chr1", 5, "chr1", 6, "+", "+", "UU"),
+    ]
+    source = write_pairs(tmp_path / "literal.pairs", header, rows)
+    condition = 'readID == "a and b"'
+
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.pairs"
+    run_pairtools("select", condition, "-o", reference, source)
+    run_cli(
+        "select", condition, source, "-o", ours, "--compress-program", "none"
+    )
+
+    body = read_pairs_body(ours)
+    assert [l.split("\t")[0] for l in body] == ["a and b"]
+    assert read_pairs_body(reference) == body
+
+
+def test_select_output_rest_partitions_the_input(tmp_path, mock_pairs_path):
+    selected = tmp_path / "sel.pairs"
+    rest = tmp_path / "rest.pairs"
+    run_cli(
+        "select",
+        'pair_type == "UU"',
+        mock_pairs_path,
+        "-o",
+        selected,
+        "--output-rest",
+        rest,
+        "--compress-program",
+        "none",
+    )
+
+    body = read_pairs_body(mock_pairs_path)
+    assert sorted(read_pairs_body(selected) + read_pairs_body(rest)) == sorted(body)
+    assert all(l.split("\t")[7] == "UU" for l in read_pairs_body(selected))
+    assert all(l.split("\t")[7] != "UU" for l in read_pairs_body(rest))
+
+
+def test_select_startup_code(tmp_path, mock_pairs_path):
+    """--startup-code defines helpers usable in CONDITION, as in pairtools."""
+    # kept to one line: both tools record the full command line in a @PG
+    # header record, and an embedded newline would split that header line
+    startup = "def is_cis(c1, c2): return c1 == c2"
+    condition = "is_cis(chrom1, chrom2)"
+
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.pairs"
+    run_pairtools(
+        "select", condition, "--startup-code", startup, "-o", reference, mock_pairs_path
+    )
+    run_cli(
+        "select",
+        condition,
+        mock_pairs_path,
+        "-o",
+        ours,
+        "--startup-code",
+        startup,
+        "--compress-program",
+        "none",
+    )
+
+    assert read_pairs_body(reference) == read_pairs_body(ours)
+    assert len(read_pairs_body(ours)) > 0
+
+
+def test_select_matching_nothing_still_feeds_sort(tmp_path, mock_pairs_path):
+    """An empty selection is a valid .pairs file and must stay usable."""
+    empty = tmp_path / "empty.pairs"
+    run_cli(
+        "select",
+        'pair_type == "NOPE"',
+        mock_pairs_path,
+        "-o",
+        empty,
+        "--compress-program",
+        "none",
+    )
+    assert read_pairs_body(empty) == []
+
+    sorted_empty = tmp_path / "empty.sorted.parquet"
+    run_cli("sort", "-o", sorted_empty, empty)
+    assert read_parquet_body(sorted_empty) == []
+
+
 @pytest.mark.parametrize("compress_program", ["none", "gzip"])
 def test_sort_to_compressed_output(tmp_path, mock_pairs_path, compress_program):
     suffix = ".pairs" if compress_program == "none" else ".pairs.gz"

@@ -1,7 +1,12 @@
 from . import (
-    csv_parquet_converter,
-    duckdb_select,
-    duckdb_utils,
     header_metadata,
     json_transform,
+    headerio,
+    schema,
+    arrowio,
+    duckdb_utils,
+    duckdbio,
+    csv_parquet_converter,
+    select,
+    sort,
 )
