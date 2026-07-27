@@ -1,59 +1,17 @@
 # -*- coding: utf-8 -*-
-import os
-import sys
-import subprocess
-import pytest
+from conftest import (
+    read_pairs_body,
+    read_pairs_header,
+    read_parquet_body,
+    read_parquet_header,
+    run_cli,
+)
 
-testdir = os.path.dirname(os.path.realpath(__file__)) # __file__ is a built-in variable that Python automatically sets when it loads a module or script from a file.
 
-
-def test_mock_pairs():
-    mock_pairs_path = os.path.join(testdir, "data", "mock.pairs")
-    mock_output_pairs_path = os.path.join(testdir, "data/sort_results", "sorted_mock.pairs")
-    try:
-        result = subprocess.check_output(
-            ["python", "-m", "pairtools_parquet", "sort", "-o", mock_output_pairs_path, "--compress-program", "none", mock_pairs_path],
-        )
-    except subprocess.CalledProcessError as e:
-        print(e.output)
-        print(sys.exc_info())
-
-        raise e
-
-    # Check that the only changes strings are a @PG record of a SAM header,
-    # the "#sorted" entry and chromosomes
-    pairs_header = [
-        l.strip() for l in open(mock_pairs_path, "r") if l.startswith("#")
-    ]
-    output_header = [l.strip() for l in open(mock_output_pairs_path, "r") if l.startswith("#")]
-
-    print(output_header)
-    print(pairs_header)
-    for l in output_header:
-        if not any([l in l2 for l2 in pairs_header]):
-            assert (
-                l.startswith("#samheader: @PG")
-                or l.startswith("#sorted")
-                or l.startswith("#chromosomes")
-            )
-
-    pairs_body = [
-        l.strip()
-        for l in open(mock_pairs_path, "r")
-        if not l.startswith("#") and l.strip()
-    ]
-    output_body = [
-        l.strip()
-        for l in open(mock_output_pairs_path, "r")
-        if not l.startswith("#") and l.strip()
-    ]
-
-    # check that all pairs entries survived sorting:
-    assert len(pairs_body) == len(output_body)
-
-    # check the sorting order of the output:
+def assert_sorted(body):
+    """Assert chrom1 -> chrom2 -> pos1 -> pos2 ordering over tab-separated lines."""
     prev_pair = None
-    for l in output_body:
+    for l in body:
         cur_pair = l.split("\t")[1:8]
         if prev_pair is not None:
             assert cur_pair[0] >= prev_pair[0]
@@ -67,23 +25,58 @@ def test_mock_pairs():
         prev_pair = cur_pair
 
 
+def assert_header_only_gained_provenance(input_header, output_header):
+    """Assert the output header only adds a @PG record, #sorted and #chromosomes."""
+    for l in output_header:
+        if not any([l in l2 for l2 in input_header]):
+            assert (
+                l.startswith("#samheader: @PG")
+                or l.startswith("#sorted")
+                or l.startswith("#chromosomes")
+            )
 
 
+def test_mock_pairs(tmp_path, mock_pairs_path):
+    output_path = tmp_path / "sorted_mock.pairs"
+    run_cli("sort", "-o", output_path, "--compress-program", "none", mock_pairs_path)
+
+    assert_header_only_gained_provenance(
+        read_pairs_header(mock_pairs_path), read_pairs_header(output_path)
+    )
+
+    input_body = read_pairs_body(mock_pairs_path)
+    output_body = read_pairs_body(output_path)
+
+    # check that all pairs entries survived sorting:
+    assert len(input_body) == len(output_body)
+    assert sorted(input_body) == sorted(output_body)
+
+    assert_sorted(output_body)
 
 
-def test_mock_pairs_parquet():
-    ######## Check later for parquet, right now used as creating sorted_mock.parquet:
-    
-    mock_pairs_path = os.path.join(testdir, "data", "mock.pairs")
-    mock_output_pairs_path = os.path.join(testdir, "data/sort_results", "sorted_mock.parquet")
-    try:
-        result = subprocess.check_output(
-            ["python", "-m", "pairtools_parquet", "sort", "-o", mock_output_pairs_path, "--compress-program", "none", mock_pairs_path],
-        )
-    except subprocess.CalledProcessError as e:
-        print(e.output)
-        print(sys.exc_info())
+def test_mock_pairs_parquet(tmp_path, mock_pairs_path):
+    output_path = tmp_path / "sorted_mock.parquet"
+    run_cli("sort", "-o", output_path, "--compress-program", "none", mock_pairs_path)
 
-        raise e
+    assert_header_only_gained_provenance(
+        read_pairs_header(mock_pairs_path), read_parquet_header(output_path)
+    )
+
+    input_body = read_pairs_body(mock_pairs_path)
+    output_body = read_parquet_body(output_path)
+
+    assert len(input_body) == len(output_body)
+    assert sorted(input_body) == sorted(output_body)
+
+    assert_sorted(output_body)
 
 
+def test_pairs_and_parquet_outputs_agree(tmp_path, mock_pairs_path):
+    """Sorting the same input to either format must produce the same rows."""
+    pairs_output = tmp_path / "sorted_mock.pairs"
+    parquet_output = tmp_path / "sorted_mock.parquet"
+
+    run_cli("sort", "-o", pairs_output, "--compress-program", "none", mock_pairs_path)
+    run_cli("sort", "-o", parquet_output, "--compress-program", "none", mock_pairs_path)
+
+    assert read_pairs_body(pairs_output) == read_parquet_body(parquet_output)
