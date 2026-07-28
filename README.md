@@ -59,6 +59,10 @@ $ pip install -e .
 
 - `select`: filter pairs by a `pairtools select` condition. The condition is evaluated by pairtools itself, so the full condition language works, including `--startup-code`.
 
+- `merge`: merge sorted files, keeping them sorted. Inputs may be a mix of formats.
+
+- `dedup`: find and remove PCR/optical duplicates, with statistics. Uses pairtools' own algorithm, so results match exactly.
+
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
 

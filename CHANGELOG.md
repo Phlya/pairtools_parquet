@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 ### Added
+- `dedup`, ported from `pairtools dedup`. The algorithm is pairtools' own —
+  every chunk goes through its `_dedup_chunk` unchanged — so output and
+  statistics are identical. The `scipy` and `sklearn` backends are supported;
+  pairtools' `cython` backend is not, as it works line-by-line on text streams.
 - `merge`, ported from `pairtools merge`. Inputs may be a mix of `.pairs`,
   `.pairs.gz` and `.parquet`; the output is whichever the extension names.
 - `lib/arrowio.py`, an Arrow record-batch I/O layer. Every tool reads and writes

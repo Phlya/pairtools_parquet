@@ -25,6 +25,36 @@ We reproduce the behaviour in `sort` (matching upstream byte-for-byte matters
 more than the line being right) and avoid it in `merge`, matching upstream
 there too. Both are pinned by tests in `tests/test_parity.py`.
 
+### `dedup --keep-parent-id` writes an unmapped file whose header undercounts its columns
+
+`lib/dedup.py:streaming_dedup` writes the unmapped pairs before dropping the
+`parent_readID` column:
+
+```python
+if outstream_unmapped:
+    df_chunk.loc[~mask_mapped, :].to_csv(outstream_unmapped, ...)   # 9 fields
+...
+if keep_parent_id:
+    df_chunk = df_chunk.drop(columns=["parent_readID"])
+```
+
+but the header written to that stream is the un-extended one. The result
+declares 8 columns and contains 9 fields per row, so anything that parses by
+`#columns` misreads it.
+
+**We deliberately diverge here**: the unmapped output gets the 9-column header
+that matches its rows. Bug-for-bug parity is not available in Parquet anyway —
+a Parquet file has a real schema, so there is no way to write 9 columns while
+declaring 8. The bodies are identical to pairtools; only the header differs,
+and only under `--keep-parent-id --output-unmapped`.
+
+### `headerops.append_columns` mutates its argument
+
+It rewrites the `#columns` line of the list it is passed and returns that same
+list, unlike the other `headerops` functions, which return new headers. Callers
+that keep a reference to the original — e.g. to write a second output with the
+unmodified columns — silently get the modified one.
+
 ### `select.evaluate_df` casts columns only when they are already the target type
 
 `pairtools/lib/select.py`:
