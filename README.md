@@ -63,6 +63,12 @@ $ pip install -e .
 
 - `dedup`: find and remove PCR/optical duplicates, with statistics. Uses pairtools' own algorithm, so results match exactly.
 
+- `flip`: reflect pairs onto the upper triangle, given a chromosome order.
+
+- `markasdup`: tag every pair as a duplicate.
+
+- `sample`: take a seeded random subset of pairs.
+
 - `stats`: summary statistics, and merging of stats files.
 
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.

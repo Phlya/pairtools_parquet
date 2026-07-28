@@ -187,6 +187,9 @@ def common_io_options(func):
 
 from . import (
     dedup,
+    flip,
+    markasdup,
+    sample,
     stats,
     merge,
     sort,

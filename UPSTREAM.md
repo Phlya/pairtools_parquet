@@ -48,6 +48,36 @@ a Parquet file has a real schema, so there is no way to write 9 columns while
 declaring 8. The bodies are identical to pairtools; only the header differs,
 and only under `--keep-parent-id --output-unmapped`.
 
+### `flip` oscillates for pairs on the same unannotated chromosome
+
+`pairtools flip` is meant to project pairs onto the upper triangle, so running
+it twice should be the same as running it once. It is not, for a pair whose two
+sides are on the same chromosome that is *absent from the chromsizes file*.
+That case falls into the both-unannotated branch:
+
+```python
+elif not is_annotated1 and not is_annotated2:
+    has_correct_order = cols[chrom1_col] < cols[chrom2_col]
+```
+
+which is `False` when the two names are equal, so the sides are swapped —
+every run, regardless of position:
+
+```
+in    r1  chrUNKNOWN 100  chrUNKNOWN 900  + - UR
+x1    r1  chrUNKNOWN 900  chrUNKNOWN 100  - + RU
+x2    r1  chrUNKNOWN 100  chrUNKNOWN 900  + - UR
+x3    r1  chrUNKNOWN 900  chrUNKNOWN 100  - + RU
+```
+
+The positions are never compared, so neither ordering is "upper triangular".
+Comparing `(chrom, pos)` rather than `chrom` alone in that branch would fix it,
+matching what the both-annotated branch does.
+
+We reproduce the behaviour, and `tests/test_smalltools.py` pins both that our
+double-flip matches upstream's and that flipping *is* idempotent for annotated
+chromosomes.
+
 ### `stats --merge` output ordering is not reproducible
 
 `pairtools stats --merge` writes its keys in an order that varies between

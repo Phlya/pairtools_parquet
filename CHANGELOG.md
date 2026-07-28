@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 ### Added
+- `flip`, `markasdup` and `sample`, ported from their pairtools counterparts.
+  `sample` reproduces pairtools' per-row draw sequence, so a given `--seed`
+  selects the same pairs as `pairtools sample` does.
 - `stats`, ported from `pairtools stats`, including `--filter`, `--yaml`,
   `--bytile-dups` and `--merge`. Statistics come from pairtools' own
   `PairCounter`, so they are identical.
