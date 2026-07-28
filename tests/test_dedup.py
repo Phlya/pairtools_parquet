@@ -383,3 +383,44 @@ def test_duckdb_parent_ids_do_not_depend_on_the_window(
     )
 
     assert read_pairs_body(whole) == read_pairs_body(windowed)
+
+
+def test_exact_dedup_does_not_depend_on_input_order(tmp_path):
+    """With --max-mismatch 0 the answer does not depend on the file's order.
+
+    Exact equality is transitive, so a group of identical pairs is a cluster
+    however the rows are arranged -- no sort, no window, no chunk boundary.
+    `pairtools dedup` only compares within a chunk, so on shuffled input it
+    reports duplicates it should have found as unique.
+    """
+    import random
+
+    header = read_pairs_header(make_duplicated_pairs(tmp_path / "seed.pairs"))
+    body = read_pairs_body(tmp_path / "seed.pairs")
+
+    ordered = tmp_path / "ordered.pairs"
+    with open(ordered, "w") as f:
+        f.write("".join(l + "\n" for l in header + sorted(body, key=_sort_key)))
+
+    shuffled_body = list(body)
+    random.Random(3).shuffle(shuffled_body)
+    shuffled = tmp_path / "shuffled.pairs"
+    with open(shuffled, "w") as f:
+        f.write("".join(l + "\n" for l in header + shuffled_body))
+
+    kept = {}
+    for name, path in (("ordered", ordered), ("shuffled", shuffled)):
+        out = tmp_path / "{}.out.pairs".format(name)
+        run_cli("dedup", "--max-mismatch", "0", "-o", out, path)
+        # which read survives depends on file order; which *positions* do not
+        kept[name] = sorted(
+            "\t".join(l.split("\t")[1:]) for l in read_pairs_body(out)
+        )
+
+    assert kept["ordered"] == kept["shuffled"]
+    assert len(kept["ordered"]) > 0
+
+
+def _sort_key(line):
+    f = line.split("\t")
+    return (f[1], f[3], int(f[2]), int(f[4]))

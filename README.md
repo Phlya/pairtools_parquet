@@ -61,7 +61,10 @@ $ pip install -e .
 
 - `merge`: merge sorted files, keeping them sorted. Inputs may be a mix of formats.
 
-- `dedup`: find and remove PCR/optical duplicates, with statistics. **6.4x faster than `pairtools dedup`** (62.2s → 9.7s on 5.6M pairs), byte-identical output. `--max-mismatch` is 3bp and the input is sorted, so duplicate detection is a lookup in a 3bp window rather than a nearest-neighbour search: bucketing on `(chrom1, chrom2, strand1, strand2, pos1 // r)` makes it an equi-join. `--backend scipy` restores pairtools' KD-tree implementation.
+- `dedup`: find and remove PCR/optical duplicates, with statistics. Byte-identical output, `--backend scipy` restores pairtools' KD-tree implementation.
+
+  - **`--max-mismatch 0` (exact): 7.3x faster** — 50.8s → 7.0s on 5.6M pairs. Exact equality is transitive, so each group of identical pairs is already a cluster and no graph is needed; the detection itself is 2.1s and the rest is I/O. This path does not care what order the file is in, so it needs no sort — and unlike `pairtools dedup`, which only compares within a chunk, it gives the same answer on a shuffled file as on a sorted one.
+  - **Default `--max-mismatch 3`: 6.4x faster** — 62.2s → 9.7s. A 3bp tolerance makes this a lookup in a 3bp window rather than a nearest-neighbour search, so bucketing on `(chrom1, chrom2, strand1, strand2, pos1 // r)` turns it into an equi-join. Rows at identical positions are collapsed first, which keeps the edge list linear rather than quadratic in the duplication rate.
 
 - `flip`: reflect pairs onto the upper triangle, given a chromosome order.
 

@@ -173,11 +173,29 @@ def edge_sql(keys, p1, p2, r, method, lo, hi):
     directions, and ``a.rid < p.rid`` keeps the one whose first row comes first
     in the file. That is pairtools' keeper, and it holds whatever order the
     input is in.
+
+    Rows sharing an exact position are collapsed first, because they have
+    identical neighbourhoods: whatever one of them is within `r` of, so are the
+    others. The smallest row id of each position stands for the rest, joined to
+    them by a star, and only those representatives take part in the pairwise
+    search.
+
+    That matters where families are deep. A family of ten otherwise contributes
+    45 edges where nine span it, and the count grows quadratically with
+    duplication: on a 90%-duplicate library the edge list drops from 47M to 16M
+    and the clustering stage from 13.5s to 4.9s. It costs about 1.4s on 5.6M
+    rows where there is nothing to collapse, which is the trade -- a fixed cost
+    against a quadratic one, in both time and the memory the edge arrays take.
+
+    The representative is found with a window rather than a GROUP BY joined
+    back to the rows: the join form makes DuckDB build a plan that did not
+    finish at all on a low-duplication file, while the window is one pass.
     """
     if method not in METRICS:
         raise ValueError('Unknown method, only "sum" or "max" allowed')
 
     columns = ", ".join(quote_identifier(name) for name in keys + [p1, p2])
+    point = ", ".join(quote_identifier(name) for name in keys + [p1, p2])
     on = " AND ".join(
         "a.{k} = p.{k}".format(k=quote_identifier(name)) for name in keys
     )
@@ -189,18 +207,25 @@ def edge_sql(keys, p1, p2, r, method, lo, hi):
 
     return """
 WITH w AS (
-  SELECT rid, {columns}, {p1} // {width} AS blk
+  SELECT rid, {columns}, min(rid) OVER (PARTITION BY {point}) AS rep
   FROM keys WHERE rid >= {lo} AND rid < {hi}
+), stars AS (
+  SELECT rep AS u, rid AS v FROM w WHERE rid <> rep
+), b AS (
+  SELECT rid, {columns}, {p1} // {width} AS blk FROM w WHERE rid = rep
 ), p AS (
-              SELECT rid, {columns}, blk     AS kb FROM w
-    UNION ALL SELECT rid, {columns}, blk - 1       FROM w
-    UNION ALL SELECT rid, {columns}, blk + 1       FROM w
+              SELECT rid, {columns}, blk     AS kb FROM b
+    UNION ALL SELECT rid, {columns}, blk - 1       FROM b
+    UNION ALL SELECT rid, {columns}, blk + 1       FROM b
+), near AS (
+  SELECT a.rid AS u, p.rid AS v
+  FROM b a JOIN p ON {on} AND a.blk = p.kb
+  WHERE a.rid < p.rid AND {metric} <= {r}
 )
-SELECT a.rid AS u, p.rid AS v
-FROM w a JOIN p ON {on} AND a.blk = p.kb
-WHERE a.rid < p.rid AND {metric} <= {r}
+SELECT u, v FROM stars UNION ALL SELECT u, v FROM near
 """.format(
         columns=columns,
+        point=point,
         p1=quote_identifier(p1),
         width=width,
         lo=int(lo),
@@ -209,6 +234,30 @@ WHERE a.rid < p.rid AND {metric} <= {r}
         metric=metric,
         r=int(r),
     )
+
+
+def exact_duplicates(con, keys, p1, p2):
+    """Find duplicates when `--max-mismatch` is 0, which needs no graph at all.
+
+    Exact equality is transitive, so each group of identical pairs is already a
+    cluster: there is nothing to connect, no edge list to build or move, and no
+    window to bound it -- one pass over the key columns answers the whole file
+    at once. The first row of each group is the keeper, as everywhere else.
+
+    Only the duplicates come back, so at low duplication almost nothing is
+    transferred.
+
+    Returns ``(duplicate row ids, their keepers' row ids)``.
+    """
+    point = ", ".join(quote_identifier(name) for name in keys + [p1, p2])
+    found = con.execute(
+        """
+        SELECT rid, rep FROM (
+          SELECT rid, min(rid) OVER (PARTITION BY {point}) AS rep FROM keys
+        ) WHERE rid <> rep
+        """.format(point=point)
+    ).fetchnumpy()
+    return found["rid"].astype(np.int64), found["rep"].astype(np.int64)
 
 
 def cluster_window(u, v, lo, hi):
@@ -622,26 +671,35 @@ def _dedup_duckdb(input_path, writers, stats, backend, n_proc, marking, **kwargs
             **kwargs
         )
 
-        # A duplicate never becomes unique again as later windows revise their
-        # lookback, so the flags can be OR-ed in; only the keeper can move, and
-        # only when --keep-parent-id makes it visible.
         is_dup = np.zeros(n_rows, dtype=bool)
-        parent_of = np.zeros(n_rows, dtype=np.int64) if keep_parent_id else None
+        parent_of = None
 
-        for lo, end, keepers in duplicate_windows(
-            con,
-            keys,
-            p1,
-            p2,
-            marking["max_mismatch"],
-            marking["method"],
-            n_rows,
-            marking["chunksize"],
-            marking["carryover"],
-        ):
-            is_dup[lo:end] |= keepers != np.arange(lo, end, dtype=np.int64)
-            if parent_of is not None:
-                parent_of[lo:end] = keepers
+        if int(marking["max_mismatch"]) == 0:
+            dup_rid, parent_rid = exact_duplicates(con, keys, p1, p2)
+            is_dup[dup_rid] = True
+            if keep_parent_id:
+                parent_of = np.arange(n_rows, dtype=np.int64)
+                parent_of[dup_rid] = parent_rid
+        else:
+            # A duplicate never becomes unique again as later windows revise
+            # their lookback, so the flags can be OR-ed in; only the keeper can
+            # move, and only when --keep-parent-id makes it visible.
+            if keep_parent_id:
+                parent_of = np.zeros(n_rows, dtype=np.int64)
+            for lo, end, keepers in duplicate_windows(
+                con,
+                keys,
+                p1,
+                p2,
+                marking["max_mismatch"],
+                marking["method"],
+                n_rows,
+                marking["chunksize"],
+                marking["carryover"],
+            ):
+                is_dup[lo:end] |= keepers != np.arange(lo, end, dtype=np.int64)
+                if parent_of is not None:
+                    parent_of[lo:end] = keepers
 
         parents = None
         if keep_parent_id:

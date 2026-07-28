@@ -107,6 +107,31 @@ parity. `tests/test_restrict.py` pins both our behaviour and, via
 `test_pairtools_restrict_crashes_on_missing_chromosome`, that upstream still
 crashes, so we learn when it is fixed.
 
+### `dedup` silently misses duplicates in input that is not sorted
+
+`pairtools dedup` compares pairs only within a `--chunksize` chunk plus a
+`--carryover` tail, which is sound for sorted input, where duplicates are
+adjacent. It does not check that its input *is* sorted, and on input that is
+not, most duplicate pairs never share a chunk. On a 200k-row shuffled file:
+
+```
+true unique reads (same file, sorted)   194189
+pairtools dedup on the shuffled file    197802     (3613 duplicates missed)
+```
+
+It is also 18x slower doing it, because every chunk's KD-tree is built over
+scattered coordinates.
+
+This is not something we work around for `--max-mismatch > 0` — a windowed
+algorithm has the same constraint. But **exact** deduplication has no such
+constraint: equality is transitive, so a group of identical pairs is a cluster
+regardless of where its members sit in the file. `--max-mismatch 0` takes a
+single grouped pass here and gives the same answer on a shuffled file as on a
+sorted one, pinned by
+`test_exact_dedup_does_not_depend_on_input_order`. Upstream could do the same
+by special-casing `r == 0` to a hash group-by, and would then also be able to
+deduplicate before sorting rather than after.
+
 ### `dedup`'s carryover cuts duplicate chains at every chunk boundary
 
 `_dedup_stream` carries the tail of each chunk into the next so a duplicate

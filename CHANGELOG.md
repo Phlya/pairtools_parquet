@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 ### Added
+- `dedup --max-mismatch 0` — exact duplicate detection — takes a path with no
+  graph in it at all. Exact equality is transitive, so each group of identical
+  pairs is already a cluster: no edge list, no connected components, no window.
+  **50.8s -> 7.0s against `pairtools dedup`** on 5.6M pairs, of which 2.1s is
+  the detection itself and the rest is reading and writing the file.
+  It is also **independent of the input's order**, so it needs no sort. On a
+  shuffled file it finds exactly the duplicates it finds on a sorted one, where
+  `pairtools dedup` compares only within a chunk and misses most of them —
+  197,802 reads reported unique against a true 194,189 on a 200k-row shuffled
+  file, and 18x slower doing it.
 - `dedup --backend duckdb`, now the default, is **6.4x faster than `pairtools
   dedup`** (62.2s -> 9.7s on 5.6M pairs, 4 threads) and produces byte-identical
   output. `--max-mismatch` is 3bp by default and dedup input is sorted, so
@@ -15,6 +25,12 @@
   showed its KD-trees were only 12% of the runtime and pandas bookkeeping the
   rest, so this replaces both. `scipy` and `sklearn` still work and are the
   reference the new backend is tested against.
+  With a non-zero `--max-mismatch`, rows sharing an exact position are
+  collapsed before the pairwise search, since they have identical
+  neighbourhoods. That keeps the edge list from growing quadratically with
+  duplication: on a 90%-duplicate library it is 16M edges instead of 47M, and
+  the clustering stage 4.9s instead of 13.5s. It costs about 1.4s where there
+  is nothing to collapse.
   With this backend `--chunksize` is a memory knob rather than a semantic one:
   its lookback resolves clusters across a window boundary, so the answer does
   not depend on it. The default rises to 20,000,000 rows accordingly, and
