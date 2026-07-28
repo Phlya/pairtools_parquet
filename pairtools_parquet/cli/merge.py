@@ -45,6 +45,15 @@ from . import cli, common_io_options
     help="Number of threads for merging.",
 )
 @click.option(
+    "--max-nmerge",
+    type=int,
+    default=8,
+    show_default=True,
+    help="The maximal number of inputs merged at once. For more, merged "
+    "intermediates are stored in temporary .parquet files. Pass 0 to merge "
+    "every input in one pass.",
+)
+@click.option(
     "--keep-first-header/--no-keep-first-header",
     default=False,
     show_default=True,
@@ -64,6 +73,7 @@ def merge(
     memory,
     compress_program,
     nproc,
+    max_nmerge,
     keep_first_header,
     concatenate,
     **kwargs,
@@ -87,6 +97,7 @@ def merge(
         output,
         concatenate=concatenate,
         keep_first_header=keep_first_header,
+        max_nmerge=max_nmerge,
         nproc=nproc,
         tmpdir=tmpdir,
         memory=memory,

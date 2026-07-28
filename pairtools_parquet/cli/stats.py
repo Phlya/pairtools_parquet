@@ -58,6 +58,17 @@ from . import cli, common_io_options
     ' \'unique:(pair_type=="UU")\'. Multiple filters can be provided.',
 )
 @click.option(
+    "--chrom-subset",
+    type=str,
+    default=None,
+    help="A path to a chromosomes file (tab-separated, 1st column contains "
+    "chromosome names) containing a chromosome subset of interest. "
+    "If provided, additionally filter pairs with both sides originating from "
+    "the provided subset of chromosomes. This operation modifies the "
+    "#chromosomes: and #chromsize: header fields accordingly. Note that "
+    "`pairtools stats` accepts this option and then ignores it.",
+)
+@click.option(
     "--engine",
     type=str,
     default="pandas",
@@ -96,6 +107,7 @@ def stats(
     bytile_dups,
     output_bytile_stats,
     filters,
+    chrom_subset,
     engine,
     startup_code,
     type_cast,
@@ -131,6 +143,7 @@ def stats(
         bytile_dups=bytile_dups,
         output_bytile_stats=output_bytile_stats or None,
         filters=list(filters),
+        chrom_subset=chrom_subset,
         startup_code=startup_code,
         type_cast=type_cast,
         engine=engine,

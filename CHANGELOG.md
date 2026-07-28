@@ -5,6 +5,41 @@
 
 ## [Unreleased]
 ### Added
+- `tests/test_cli_parity.py`, which requires every pairtools command and option
+  to exist here under the same name. Nothing checked this before, so a renamed
+  option passed the whole suite — the rest of the tests call options by
+  whichever spelling this package chose. It found five gaps, all now closed
+  (below). Options we deliberately do not accept are listed in the test with
+  the reason, so an omission is a decision on the record.
+- `filterbycov --backend duckdb`, now the default, is **7.4x faster than
+  `pairtools filterbycov`** (136.9s -> 18.4s on 5.6M pairs) with byte-identical
+  output. Coverage is a neighbour count — for each end of each pair, how many
+  other ends lie within `--max-dist` on the same chromosome — so it gets the
+  same treatment as `dedup`: bucket the ends by position and the search is an
+  equi-join. pairtools computes it with `_filterbycov`, whose own docstring
+  reads "This is a slow version of the filtering code used for testing purposes
+  only. Use cythonized version in the future!!"; the cythonized version never
+  arrived, and that double loop was 95s of the 110s this tool took. It is still
+  available as `--backend python` and is the reference the DuckDB backend is
+  tested against.
+- `dedup --filter`, `--chrom-subset`, `--output-bytile-stats`, `--startup-code`,
+  `-t/--type-cast` and `--engine`, matching `pairtools dedup`. The filters feed
+  pairtools' own `PairCounter`, so `--yaml --filter 'unique:(pair_type=="UU")'`
+  produces the same statistics file upstream does.
+  `--output-bytile-stats` forces `--keep-parent-id`, as upstream does.
+- `dedup --tmpdir` and `--memory`, which the DuckDB backend already honoured but
+  which only `sort` exposed. They default to DuckDB's own limits rather than to
+  `sort`'s 2G.
+- `dedup` and `filterbycov` accept `--send-header-to`. It applies to text
+  outputs; a `.parquet` keeps its header either way, since there the header is
+  key-value metadata rather than leading lines and a file without it cannot be
+  read back as pairs.
+- `merge --max-nmerge`, matching upstream. Beyond it the merge runs in rounds
+  through temporary Parquet files, so a fan-in of thousands does not need every
+  input open at once. The header is decided once from the real inputs and handed
+  to every round, so a staged merge writes what a single-pass one would.
+- `stats --chrom-subset`, which upstream declares and never reads (see
+  UPSTREAM.md).
 - `dedup --max-mismatch 0` — exact duplicate detection — takes a path with no
   graph in it at all. Exact equality is transitive, so each group of identical
   pairs is already a cluster: no edge list, no connected components, no window.
@@ -97,6 +132,27 @@
   it to SQL, so the condition language is whatever pairtools supports.
 
 ### Fixed
+- `flip`'s chromosome-order file is `-c/--chroms-path`, as in pairtools. It was
+  named `--chrom-subset` here, which is not only a different name but the name
+  of an unrelated pairtools option — a filter, in `select`, `stats` and `dedup`.
+  Every test used `-c`, so nothing caught it.
+- `flip` is **2.7x faster** (15.9s -> 6.0s on 5.6M pairs) and no longer slower
+  than `pairtools flip`. Ranking a chromosome column meant materializing it as
+  Python strings to look the names up in a dict: 7.1s per column, twice per
+  batch. `pc.index_in` against the chromosome order does it in Arrow in 0.4s.
+  Only rows whose *both* sides are missing from the chromsizes file are still
+  compared by name, and only those rows are materialized.
+- `restrict` is **3.3x faster** (25.3s -> 7.6s), 5.9x against `pairtools
+  restrict`. Same cause, plus `np.unique` over a column of Python strings — 7.4s
+  of the 23s, and the same numpy pathology that shaped `dedup`'s clustering.
+  Dictionary-encoding the chromosome column gives the distinct values for free
+  and turns per-chromosome row selection into an integer comparison.
+- `select --chrom-subset` tests membership with `pc.is_in` rather than rebuilding
+  a Python list and calling `np.isin` on decoded strings once per batch.
+- `sample` draws with `iter(rng.random, None)` instead of a generator
+  expression. The draws have to stay one-per-row to keep `--seed` meaning what
+  it means in pairtools, but the per-row Python frame does not: 1.6s of frame
+  overhead against 0.38s of actual random number generation.
 - `sort` no longer reorders pairs tied on chrom1/chrom2/pos1/pos2. Chromosome,
   strand and pair type were cast to DuckDB ENUMs, which order by declaration
   index, and the pair-type ENUM was declared in `itertools.product` order — so

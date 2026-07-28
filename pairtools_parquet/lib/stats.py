@@ -8,11 +8,14 @@ Nothing about the statistics themselves is reimplemented.
 straight to pairtools' `do_merge`.
 """
 
+import pyarrow as pa
+import pyarrow.compute as pc
 from pairtools.lib import headerops
 from pairtools.lib.stats import PairCounter, do_merge
 
 from .._logging import get_logger
 from .arrowio import open_pairs
+from .select import read_chrom_subset
 
 UTIL_NAME = "pairtools_parquet_stats"
 
@@ -20,6 +23,46 @@ logger = get_logger()
 
 #: Rows per batch. pairtools reads stats chunks of this size.
 DEFAULT_CHUNKSIZE = 100_000
+
+
+def parse_filters(filters, yaml):
+    """Turn ``name:condition`` strings into what `PairCounter` wants.
+
+    Shared with `dedup`, which takes the same `--filter` option and builds the
+    same counter from it.
+
+    Returns ``(filter map or None, the name to report in non-YAML output)``.
+    """
+    if not filters:
+        return None, "no_filter"
+
+    # Non-YAML output can only show one filter, so the first one names it.
+    first_filter_name = filters[0].split(":", 1)[0]
+    if len(filters) > 1 and not yaml:
+        logger.warning(
+            "Output the first filter only in non-YAML output: %s", first_filter_name
+        )
+    return dict(f.split(":", 1) for f in filters), first_filter_name
+
+
+def restrict_to_chroms(df, chroms, c1="chrom1", c2="chrom2"):
+    """The rows of `df` with both sides on a chromosome in `chroms`.
+
+    For counting only -- `dedup --chrom-subset` narrows what the statistics
+    describe, not what is written out.
+    """
+    if chroms is None:
+        return df
+    return df[df[c1].isin(chroms) & df[c2].isin(chroms)]
+
+
+def chrom_subset_mask(table, chroms, c1="chrom1", c2="chrom2"):
+    """Rows with both sides on a chromosome in `chroms`."""
+    value_set = pa.array(sorted(chroms), type=pa.string())
+    return pc.and_(
+        pc.is_in(table.column(c1).cast(pa.string()), value_set=value_set),
+        pc.is_in(table.column(c2).cast(pa.string()), value_set=value_set),
+    )
 
 
 def stats_pairs(
@@ -31,6 +74,7 @@ def stats_pairs(
     bytile_dups=False,
     output_bytile_stats=None,
     filters=None,
+    chrom_subset=None,
     startup_code="",
     type_cast=(),
     engine="pandas",
@@ -47,6 +91,11 @@ def stats_pairs(
         Where to write the statistics.
     filters : list of str, optional
         ``name:condition`` filters, as `pairtools stats --filter` takes.
+    chrom_subset : str, optional
+        A chromsizes file naming the chromosomes of interest. Only pairs with
+        both sides on one of them are counted, and only those chromosomes are
+        reported. `pairtools stats` declares this option but never reads it,
+        so it silently counts everything; see UPSTREAM.md.
     """
     header, reader = open_pairs(
         input_path,
@@ -64,17 +113,12 @@ def stats_pairs(
     if output_bytile_stats:
         bytile_dups = True
 
-    # Non-YAML output can only show one filter, so the first one names it.
-    first_filter_name = "no_filter"
-    filter_map = None
-    if filters:
-        first_filter_name = filters[0].split(":", 1)[0]
-        if len(filters) > 1 and not yaml:
-            logger.warning(
-                "Output the first filter only in non-YAML output: %s",
-                first_filter_name,
-            )
-        filter_map = dict(f.split(":", 1) for f in filters)
+    chroms = None
+    if chrom_subset:
+        chroms = read_chrom_subset(chrom_subset)
+        header = headerops.subset_chroms_in_pairsheader(header, chroms)
+
+    filter_map, first_filter_name = parse_filters(filters, yaml)
 
     counter = PairCounter(
         n_dist_bins_decade=n_dist_bins_decade,
@@ -86,9 +130,15 @@ def stats_pairs(
     )
 
     for batch in reader:
+        if chroms is not None:
+            batch = batch.filter(chrom_subset_mask(batch, chroms))
         counter.add_pairs_from_dataframe(batch.to_pandas())
 
-    if with_chromsizes:
+    # `extract_chromsizes` zips the parsed `#chromsize:` lines and indexes the
+    # result without checking there were any, so it raises IndexError rather
+    # than returning nothing on a header that declares none -- which is what a
+    # --chrom-subset naming nothing in the file leaves behind.
+    if with_chromsizes and headerops.extract_fields(header, "chromsize"):
         counter.add_chromsizes(headerops.extract_chromsizes(header))
 
     with open(output, "w") as outstream:

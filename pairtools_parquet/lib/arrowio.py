@@ -279,9 +279,15 @@ class PairsWriter:
         row_group_size=None,
         compress_program="auto",
         nproc_out=8,
+        write_header=True,
     ):
         self.path = str(path)
         self.header = list(header)
+        # `--send-header-to` exists so text outputs can be concatenated, which
+        # is a text-only concern. Parquet keeps its header either way: there it
+        # is key-value metadata rather than leading lines, and a file without it
+        # cannot be read back as pairs at all.
+        self._write_header = bool(write_header)
         if schema is None:
             columns = headerops.extract_column_names(self.header)
             schema = schema_from_columns(columns)
@@ -342,9 +348,12 @@ class PairsWriter:
         # `headerops.get_header` keeps trailing spaces, and pairtools emits at
         # least one line that ends in one (`#genome_assembly: ` with no
         # assembly given), so stripping them would break byte parity.
-        sink.write(
-            "".join(line.rstrip("\n") + "\n" for line in self.header).encode("utf-8")
-        )
+        if self._write_header:
+            sink.write(
+                "".join(
+                    line.rstrip("\n") + "\n" for line in self.header
+                ).encode("utf-8")
+            )
 
         self._writer = self._stack.enter_context(
             pacsv.CSVWriter(

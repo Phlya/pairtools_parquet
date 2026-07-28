@@ -40,6 +40,58 @@ from . import cli, common_io_options
     "If not provided, statistics are not printed.",
 )
 @click.option(
+    "--output-bytile-stats",
+    type=str,
+    default="",
+    help="output file for by-tile duplicate statistics. The readID must "
+    "contain tile information for this to work, and --keep-parent-id is "
+    "forced on, since the analysis reads the parent's tile. "
+    "[output stats filtering option]",
+)
+@click.option(
+    "--filter",
+    "filters",
+    multiple=True,
+    help="Filter stats with conditions to apply to the data (similar to "
+    "`pairtools select` or `pairtools stats`). For non-YAML output only the "
+    "first filter is reported. Example: --yaml --filter "
+    "'unique:(pair_type==\"UU\")'. [output stats filtering option]",
+)
+@click.option(
+    "--chrom-subset",
+    type=str,
+    default=None,
+    help="A path to a chromosomes file (tab-separated, 1st column contains "
+    "chromosome names) containing a chromosome subset of interest for the "
+    "stats filter. Only pairs with both sides in the subset are counted; what "
+    "is written out is unaffected. Note that `pairtools dedup` accepts this "
+    "option and then ignores it. [output stats filtering option]",
+)
+@click.option(
+    "--engine",
+    type=str,
+    default="pandas",
+    show_default=True,
+    help="Engine to use for stats filter evaluation. "
+    "[output stats filtering option]",
+)
+@click.option(
+    "--startup-code",
+    type=str,
+    default="",
+    help="An auxiliary code to execute before stats filtering. "
+    "[output stats filtering option]",
+)
+@click.option(
+    "-t",
+    "--type-cast",
+    type=(str, str),
+    default=(),
+    multiple=True,
+    help="Cast a given column to a given type for stats filter evaluation. "
+    "[output stats filtering option]",
+)
+@click.option(
     "--max-mismatch",
     type=int,
     default=3,
@@ -139,6 +191,16 @@ from . import cli, common_io_options
     help="Placeholder for a chromosome on an unmapped side. [input format option]",
 )
 @click.option(
+    "--send-header-to",
+    type=click.Choice(["dups", "dedup", "both", "none"]),
+    default="both",
+    show_default=True,
+    help="Which of the outputs should receive header and comment lines. "
+    "Applies to text outputs only: a .parquet keeps its header either way, "
+    "since there it is metadata rather than leading lines and a file without "
+    "it cannot be read back as pairs. [input format option]",
+)
+@click.option(
     "--c1",
     type=str,
     default=pairsam_format.COLUMNS_PAIRS[1],
@@ -200,6 +262,12 @@ def dedup(
     output_dups,
     output_unmapped,
     output_stats,
+    output_bytile_stats,
+    filters,
+    chrom_subset,
+    engine,
+    startup_code,
+    type_cast,
     max_mismatch,
     method,
     backend,
@@ -210,6 +278,7 @@ def dedup(
     keep_parent_id,
     extra_col_pair,
     unmapped_chrom,
+    send_header_to,
     c1,
     c2,
     p1,
@@ -238,6 +307,12 @@ def dedup(
         output_dups=output_dups or None,
         output_unmapped=output_unmapped or None,
         output_stats=output_stats or None,
+        output_bytile_stats=output_bytile_stats or None,
+        filters=list(filters),
+        chrom_subset=chrom_subset,
+        engine=engine,
+        startup_code=startup_code,
+        type_cast=type_cast,
         max_mismatch=max_mismatch,
         method=method,
         backend=backend,
@@ -248,6 +323,7 @@ def dedup(
         keep_parent_id=keep_parent_id,
         extra_col_pair=extra_col_pair,
         unmapped_chrom=unmapped_chrom,
+        send_header_to=send_header_to,
         c1=c1,
         c2=c2,
         p1=p1,

@@ -28,6 +28,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 import pairtools.lib.select as pairtools_select
 from pairtools.lib import headerops, pairsam_format
 from pairtools.lib.select import evaluate_df
@@ -324,7 +325,14 @@ def select_pairs(
 
     new_header = header_update(header, util_name, remove_columns, chrom_subset)
     keep_columns = headerops.extract_column_names(new_header)
-    chroms = set(read_chrom_subset(chrom_subset)) if chrom_subset else None
+    # As an Arrow value set rather than a Python set: `pc.is_in` does the
+    # membership test in C++, where `np.isin` over a column materialized as
+    # Python strings costs seconds per batch on a large file.
+    chroms = (
+        pa.array(sorted(set(read_chrom_subset(chrom_subset))), type=pa.string())
+        if chrom_subset
+        else None
+    )
 
     writer_kwargs = dict(
         compress_program=compress_program,
@@ -350,8 +358,11 @@ def select_pairs(
             for batch in reader:
                 mask = evaluate_batch(batch, condition, type_cast, startup_code, code)
                 if chroms is not None:
-                    mask &= np.isin(batch.column("chrom1").to_numpy(zero_copy_only=False), list(chroms))
-                    mask &= np.isin(batch.column("chrom2").to_numpy(zero_copy_only=False), list(chroms))
+                    for side in ("chrom1", "chrom2"):
+                        in_subset = pc.is_in(
+                            batch.column(side).cast(pa.string()), value_set=chroms
+                        )
+                        mask &= in_subset.to_numpy(zero_copy_only=False).astype(bool)
 
                 projected = batch.select(keep_columns)
                 selected_writer.write(projected.filter(pa.array(mask)))

@@ -102,3 +102,57 @@ def test_outputs_partition_the_input(tmp_path, sorted_pairs):
         + len(read_pairs_body(unmapped))
     )
     assert total == len(read_pairs_body(sorted_pairs))
+
+
+@pytest.mark.parametrize("options", OPTIONS, ids=lambda o: " ".join(o) or "defaults")
+def test_duckdb_backend_matches_the_python_one(tmp_path, sorted_pairs, options):
+    """The bucketed equi-join must agree with pairtools' double loop.
+
+    The python backend calls `_filterbycov` unchanged, so this is the same
+    comparison as the pairtools parity tests -- but it runs on the two backends
+    of one implementation, which is what catches a divergence introduced on the
+    duckdb side alone.
+    """
+    outputs = {}
+    for backend in ("duckdb", "python"):
+        low = tmp_path / "{}_low.pairs".format(backend)
+        high = tmp_path / "{}_high.pairs".format(backend)
+        run_cli(
+            "filterbycov", "--backend", backend, "-o", low,
+            "--output-highcov", high, *options, sorted_pairs
+        )
+        outputs[backend] = (read_pairs_body(low), read_pairs_body(high))
+
+    assert outputs["duckdb"] == outputs["python"]
+    assert outputs["duckdb"][0], "the fixture should leave some low-coverage pairs"
+
+
+def test_coverage_counts_the_pairs_other_end(tmp_path):
+    """A pair whose own two ends are close counts each against the other.
+
+    An easy thing to get wrong when the neighbour search is a self-join: the
+    obvious "exclude this pair's rows" is wrong, only "exclude this *end*" is.
+    `_filterbycov` counts the other end because it works on a flat list of ends
+    with no memory of which pair they came from.
+    """
+    import numpy as np
+    import pyarrow as pa
+
+    from pairtools_parquet.lib.filterbycov import _ends_table, coverage_duckdb
+
+    lone = pa.table(
+        {
+            "chrom1": pa.array(["chr1"]),
+            "pos1": pa.array([1000]),
+            "chrom2": pa.array(["chr1"]),
+            "pos2": pa.array([1100]),
+        }
+    )
+    ends = _ends_table(lone, "chrom1", "pos1", "chrom2", "pos2")
+
+    # 100bp apart: each end sees the other, so each side counts 2.
+    assert coverage_duckdb(ends, 500, "max").tolist() == [2]
+    assert coverage_duckdb(ends, 500, "sum").tolist() == [3]
+    # 100bp apart is outside a 50bp window, so neither end sees anything.
+    assert coverage_duckdb(ends, 50, "max").tolist() == [1]
+    assert coverage_duckdb(ends, 50, "sum").tolist() == [1]

@@ -13,6 +13,7 @@ against `pairtools flip` column by column in tests/test_smalltools.py.
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 from pairtools.lib import headerops, pairsam_format
 
 from .._logging import get_logger
@@ -23,11 +24,25 @@ UTIL_NAME = "pairtools_parquet_flip"
 logger = get_logger()
 
 
-def chrom_order_map(chroms_path):
-    """Map chromosome name to its rank, unmapped first, as `pairtools flip` does."""
+def chrom_order(chroms_path):
+    """The chromosome names in rank order, unmapped first, as `pairtools flip` has them."""
     chromosomes = headerops.get_chrom_order(chroms_path)
-    names = [pairsam_format.UNMAPPED_CHROM] + list(chromosomes)
-    return {name: rank for rank, name in enumerate(names)}
+    return pa.array(
+        [pairsam_format.UNMAPPED_CHROM] + list(chromosomes), type=pa.string()
+    )
+
+
+def chrom_ranks(column, order):
+    """Rank of each chromosome; -1 for one the chromsizes file does not name.
+
+    ``pc.index_in`` is the whole reason this is fast: looking the names up in a
+    Python dict means materializing the column as Python strings first, which
+    on 5.6M rows costs 7s per column against 0.4s here.
+    """
+    ranks = pc.fill_null(pc.index_in(column, value_set=order), -1)
+    if isinstance(ranks, pa.ChunkedArray):
+        ranks = ranks.combine_chunks()
+    return ranks.to_numpy(zero_copy_only=False).astype(np.int64)
 
 
 def columns_to_flip(column_names):
@@ -48,10 +63,14 @@ def _reverse_pair_type(values):
     )
 
 
-def needs_flip(chrom1, chrom2, pos1, pos2, order):
-    """Boolean mask of the rows whose two sides must be swapped."""
-    ranks1 = np.array([order.get(c, -1) for c in chrom1], dtype=np.int64)
-    ranks2 = np.array([order.get(c, -1) for c in chrom2], dtype=np.int64)
+def needs_flip(ranks1, ranks2, pos1, pos2, column1=None, column2=None):
+    """Boolean mask of the rows whose two sides must be swapped.
+
+    `column1`/`column2` are only read for rows where *neither* side is in the
+    chromsizes file, which is the one case that compares names rather than
+    ranks. Passing the Arrow columns rather than Python strings keeps that cost
+    proportional to the number of such rows, which is normally none.
+    """
     annotated1 = ranks1 >= 0
     annotated2 = ranks2 >= 0
 
@@ -74,11 +93,14 @@ def needs_flip(chrom1, chrom2, pos1, pos2, order):
     # See UPSTREAM.md; this is a deliberate divergence.
     neither = ~annotated1 & ~annotated2
     if neither.any():
+        rows = pa.array(np.flatnonzero(neither))
+        names1 = column1.take(rows).to_pylist()
+        names2 = column2.take(rows).to_pylist()
         correct[neither] = np.array(
             [
                 (c1, p1) <= (c2, p2)
                 for c1, p1, c2, p2 in zip(
-                    chrom1[neither], pos1[neither], chrom2[neither], pos2[neither]
+                    names1, pos1[neither], names2, pos2[neither]
                 )
             ],
             dtype=bool,
@@ -97,7 +119,7 @@ def flip_pairs(
     **kwargs
 ):
     """Flip the pairs of `input_path` onto the upper triangle."""
-    order = chrom_order_map(chroms_path)
+    order = chrom_order(chroms_path)
 
     header, reader = open_pairs(
         input_path,
@@ -123,18 +145,20 @@ def flip_pairs(
     ) as writer:
         for batch in reader:
             table = pa.Table.from_batches([batch])
-            chrom1 = np.asarray(table.column("chrom1").to_pylist(), dtype=object)
-            chrom2 = np.asarray(table.column("chrom2").to_pylist(), dtype=object)
+            column1 = table.column("chrom1").combine_chunks()
+            column2 = table.column("chrom2").combine_chunks()
+            ranks1 = chrom_ranks(column1, order)
+            ranks2 = chrom_ranks(column2, order)
             pos1 = table.column("pos1").to_numpy(zero_copy_only=False)
             pos2 = table.column("pos2").to_numpy(zero_copy_only=False)
 
-            if not warned:
-                unannotated = [c for c in set(chrom1) | set(chrom2) if c not in order]
-                if unannotated:
-                    logger.warning("Unannotated chromosomes in the pairs file!")
-                    warned = True
+            if not warned and ((ranks1 < 0).any() or (ranks2 < 0).any()):
+                logger.warning("Unannotated chromosomes in the pairs file!")
+                warned = True
 
-            mask = pa.array(needs_flip(chrom1, chrom2, pos1, pos2, order))
+            mask = pa.array(
+                needs_flip(ranks1, ranks2, pos1, pos2, column1, column2)
+            )
 
             columns = {name: table.column(name) for name in table.column_names}
             for col1, col2 in flip_pairs_of_columns:

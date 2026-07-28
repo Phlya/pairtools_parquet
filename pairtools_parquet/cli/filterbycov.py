@@ -43,6 +43,19 @@ from . import cli, common_io_options
     '"sum" of the pairs within +/- max_dist bp of each end.',
 )
 @click.option(
+    "--backend",
+    type=click.Choice(["duckdb", "python"]),
+    default="duckdb",
+    show_default=True,
+    help="How to compute coverage. duckdb counts neighbouring ends with a "
+    "bucketed equi-join; python is pairtools' own double loop, kept as the "
+    "reference duckdb is tested against.",
+)
+@click.option(
+    "-p", "--n-proc", type=int, default=4, show_default=True,
+    help="Number of cores to use. Applies to the duckdb backend.",
+)
+@click.option(
     "--mark-multi", is_flag=True,
     help="If specified, duplicate pairs are marked as FF in pair_type and as a "
     "duplicate in the sam entries.",
@@ -50,6 +63,16 @@ from . import cli, common_io_options
 @click.option(
     "--unmapped-chrom", type=str, default=pairsam_format.UNMAPPED_CHROM,
     show_default=True, help="Placeholder for a chromosome on an unmapped side.",
+)
+@click.option(
+    "--send-header-to",
+    type=click.Choice(["lowcov", "highcov", "both", "none"]),
+    default="both",
+    show_default=True,
+    help="Which of the outputs should receive header and comment lines. "
+    "Applies to text outputs only: a .parquet keeps its header either way, "
+    "since there it is metadata rather than leading lines and a file without "
+    "it cannot be read back as pairs.",
 )
 @click.option("--c1", type=str, default="chrom1", show_default=True, help="Chrom 1 column.")
 @click.option("--c2", type=str, default="chrom2", show_default=True, help="Chrom 2 column.")
@@ -64,7 +87,8 @@ from . import cli, common_io_options
 @common_io_options
 def filterbycov(
     pairs_path, output, output_highcov, output_unmapped, output_stats,
-    max_cov, max_dist, method, mark_multi, unmapped_chrom,
+    max_cov, max_dist, method, backend, n_proc, mark_multi, unmapped_chrom,
+    send_header_to,
     c1, c2, p1, p2, s1, s2, compress_program, **kwargs,
 ):
     """Remove pairs from regions of high coverage.
@@ -80,7 +104,9 @@ def filterbycov(
         output_unmapped=output_unmapped or None,
         output_stats=output_stats or None,
         max_cov=max_cov, max_dist=max_dist, method=method,
+        backend=backend, n_proc=n_proc,
         mark_multi=mark_multi, unmapped_chrom=unmapped_chrom,
+        send_header_to=send_header_to,
         c1=c1, c2=c2, p1=p1, p2=p2, s1=s1, s2=s2,
         compress_program=compress_program, **kwargs,
     )

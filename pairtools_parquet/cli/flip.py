@@ -9,7 +9,7 @@ from . import cli, common_io_options
 @click.argument("pairs_path", type=str, required=True)
 @click.option(
     "-c",
-    "--chrom-subset",
+    "--chroms-path",
     "chroms_path",
     type=str,
     required=True,

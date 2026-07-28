@@ -8,6 +8,8 @@ bodies to be identical. The header may differ only by the @PG provenance record
 each tool appends to record itself.
 """
 
+import shutil
+
 import pytest
 
 from conftest import (
@@ -340,6 +342,39 @@ def test_merge_mixed_input_formats(tmp_path, mock_pairs_path):
     run_cli("merge", "-o", ours, as_parquet, parts[1])
 
     assert read_pairs_body(reference) == read_parquet_body(ours)
+
+
+@pytest.mark.parametrize("max_nmerge", [2, 3, 7])
+def test_merge_staging_does_not_change_the_result(
+    tmp_path, mock_pairs_path, max_nmerge
+):
+    """--max-nmerge bounds how many inputs are open at once, nothing else.
+
+    Beyond it the merge runs in rounds through temporary files, so the header
+    is decided once from the real inputs and handed to every round -- otherwise
+    each round would append its own @PG record and a staged merge would not
+    look like a single-pass one.
+    """
+    parts = split_into_sorted_inputs(tmp_path, mock_pairs_path)
+    many = []
+    for i in range(8):
+        copy = tmp_path / "copy{}.pairs".format(i)
+        shutil.copy(parts[i % len(parts)], copy)
+        many.append(copy)
+
+    one_pass = tmp_path / "one.pairs"
+    staged = tmp_path / "staged.pairs"
+    run_cli("merge", "--max-nmerge", "0", "-o", one_pass, *many)
+    run_cli("merge", "--max-nmerge", str(max_nmerge), "-o", staged, *many)
+
+    assert read_pairs_body(one_pass) == read_pairs_body(staged)
+    # The headers match except for the recorded command line, which honestly
+    # differs -- it is the invocation, and the invocations differ.
+    assert _without_command_lines(one_pass) == _without_command_lines(staged)
+
+
+def _without_command_lines(path):
+    return [line.split("\tCL:")[0] for line in read_pairs_header(path)]
 
 
 def test_merge_single_input_leaves_header_alone(tmp_path, mock_pairs_path):

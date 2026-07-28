@@ -57,7 +57,7 @@ $ pip install -e .
 
 - `sort`: sort .pairs or .parquet files(the lexicographic order for chromosomes, the numeric order for the positions, the lexicographic order for pair types)
 
-- `select`: filter pairs by a `pairtools select` condition. About 2x faster than `pairtools select`. Conditions are rewritten to evaluate over whole columns; anything the rewrite cannot express falls back to pairtools' own evaluator, so the full condition language works, including `--startup-code`.
+- `select`: filter pairs by a `pairtools select` condition. 1.4x faster than `pairtools select`. Conditions are rewritten to evaluate over whole columns; anything the rewrite cannot express falls back to pairtools' own evaluator, so the full condition language works, including `--startup-code`.
 
 - `merge`: merge sorted files, keeping them sorted. Inputs may be a mix of formats.
 
@@ -66,17 +66,17 @@ $ pip install -e .
   - **`--max-mismatch 0` (exact): 7.3x faster** — 50.8s → 7.0s on 5.6M pairs. Exact equality is transitive, so each group of identical pairs is already a cluster and no graph is needed; the detection itself is 2.1s and the rest is I/O. This path does not care what order the file is in, so it needs no sort — and unlike `pairtools dedup`, which only compares within a chunk, it gives the same answer on a shuffled file as on a sorted one. It never chunks the detection either, so file size does not reintroduce a boundary: `--chunksize` is ignored, and where the key table outgrows `--memory` DuckDB spills to `--tmpdir` rather than comparing fewer rows.
   - **Default `--max-mismatch 3`: 6.4x faster** — 62.2s → 9.7s. A 3bp tolerance makes this a lookup in a 3bp window rather than a nearest-neighbour search, so bucketing on `(chrom1, chrom2, strand1, strand2, pos1 // r)` turns it into an equi-join. Rows at identical positions are collapsed first, which keeps the edge list linear rather than quadratic in the duplication rate.
 
-- `flip`: reflect pairs onto the upper triangle, given a chromosome order.
+- `flip`: reflect pairs onto the upper triangle, given a chromosome order. 1.5x faster than `pairtools flip`.
 
 - `markasdup`: tag every pair as a duplicate.
 
-- `sample`: take a seeded random subset of pairs.
+- `sample`: take a seeded random subset of pairs. A given `--seed` selects the same pairs `pairtools sample` does, which means keeping its one-draw-per-row sequence, so this is the one tool where text input is not faster than pairtools — it types every field where `pairtools sample` only splits lines.
 
-- `filterbycov`: remove pairs from regions of unusually high coverage.
+- `filterbycov`: remove pairs from regions of unusually high coverage. **7.4x faster** (136.9s → 18.4s on 5.6M pairs). Coverage is a count of neighbouring pair ends, so it becomes an equi-join over position buckets, exactly as in `dedup`. `--backend python` restores pairtools' own double loop, which its docstring describes as "a slow version of the filtering code used for testing purposes only".
 
 - `phase`: assign pairs to parental haplotypes in a diploid genome.
 
-- `restrict`: assign pairs to restriction fragments.
+- `restrict`: assign pairs to restriction fragments. **5.9x faster** (44.2s → 7.6s), by not loading the fragment BED with `np.genfromtxt` and by ranking chromosomes as dictionary codes rather than as Python strings.
 
 - `stats`: summary statistics, and merging of stats files.
 
@@ -90,6 +90,31 @@ $ pip install -e .
 
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
+
+## Benchmarks
+
+Every tool against `pairtools` itself, on 5.6M pairs, 4 threads. "ours" is
+Parquet in and Parquet out; output is byte-identical to pairtools in every row.
+
+| Tool | `pairtools` | ours | |
+|---|---|---|---|
+| `filterbycov` | 136.9s | **18.4s** | 7.4x |
+| `restrict` | 44.2s | **7.6s** | 5.9x |
+| `dedup --max-mismatch 0` | 50.8s | **7.0s** | 7.3x |
+| `dedup` (default 3bp) | 62.2s | **9.7s** | 6.4x |
+| `stats` | 10.1s | **3.7s** | 2.7x |
+| `sort` | 6.2s | **2.6s** | 2.4x |
+| `scaling` | 15.5s | **8.3s** | 1.9x |
+| `flip` | 8.8s | **6.0s** | 1.5x |
+| `select` | 9.0s | **6.4s** | 1.4x |
+| `markasdup` | 6.6s | **5.2s** | 1.3x |
+| `sample` | **2.3s** | 2.8s | 0.8x |
+
+`sample` is the one tool that is slower, and structurally so: reproducing
+`pairtools sample`'s `--seed` means keeping its one-draw-per-row sequence, and
+the pairs then go through typed columns where `pairtools sample` only has to
+decide whether to copy a line. `split` from text input is slower for the same
+reason. Both are noted in their entries above.
 
 ## Why to use `.parquet` extention for sorting (and many more future processing tools)?
 If we use the same 2.4 GB file, 35 GB of memory, 4 threads:

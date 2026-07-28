@@ -1,13 +1,21 @@
 """Removing pairs from high-coverage regions.
 
-The coverage calculation is pairtools' ``_filterbycov``, called unchanged.
-Upstream already buffers the whole file before calling it once -- the algorithm
-needs every pair at the same time -- so this does the same, and the memory
-profile is no worse than `pairtools filterbycov`.
+Coverage here means: for each end of each pair, how many other ends lie within
+`max_dist` on the same chromosome. That is the same neighbour search `dedup`
+does, and it gets the same treatment -- bucket the ends by position and the
+search becomes an equi-join, since two ends within `max_dist` are either in the
+same bucket or in an adjacent one.
 
-Only the plumbing differs: pairs arrive as Arrow batches and leave through
-:class:`~pairtools_parquet.lib.arrowio.PairsWriter`, so any input and output
-format works.
+pairtools computes it with ``_filterbycov``, whose own docstring reads "This is
+a slow version of the filtering code used for testing purposes only. Use
+cythonized version in the future!!" -- the cythonized version never arrived, so
+that Python double loop is what `pairtools filterbycov` runs. It is 95s of the
+110s this tool used to take on 5.6M pairs. It is still here as
+``--backend python``, and is the reference the DuckDB backend is tested against.
+
+Upstream buffers the whole file before computing coverage -- the algorithm needs
+every pair at once -- so this does too, and the memory profile is no worse than
+`pairtools filterbycov`.
 """
 
 import numpy as np
@@ -16,6 +24,7 @@ from pairtools.lib import headerops, pairsam_format
 from pairtools.lib.filterbycov import _filterbycov
 from pairtools.lib.stats import PairCounter
 
+from . import duckdb_utils
 from .arrowio import PairsWriter, open_pairs
 from .markasdup import SAM_COLUMNS, mark_sam_column
 
@@ -23,6 +32,9 @@ UTIL_NAME = "pairtools_parquet_filterbycov"
 
 #: Pair type recorded in the statistics for a high-coverage pair.
 HIGH_COVERAGE_PAIR_TYPE = "FF"
+
+#: Backends for the coverage calculation.
+SUPPORTED_BACKENDS = ("duckdb", "python")
 
 
 def _encode(values, mapping):
@@ -33,6 +45,97 @@ def _encode(values, mapping):
             mapping[value] = len(mapping)
         out[i] = mapping[value]
     return out
+
+
+def _ends_table(table, c1, p1, c2, p2):
+    """The 2N (chromosome, position) ends of N pairs, side 1 first.
+
+    Same layout as the stacked array pairtools builds, so end `i` is side 1 of
+    pair `i` and end `N + i` is side 2 -- which is what lets the two counts be
+    recombined per pair by slicing.
+    """
+    n = table.num_rows
+    chrom = pa.concat_arrays(
+        [
+            table.column(c1).combine_chunks().cast(pa.string()),
+            table.column(c2).combine_chunks().cast(pa.string()),
+        ]
+    )
+    pos = pa.concat_arrays(
+        [
+            table.column(p1).combine_chunks().cast(pa.int64()),
+            table.column(p2).combine_chunks().cast(pa.int64()),
+        ]
+    )
+    return pa.table(
+        {
+            "eid": pa.array(np.arange(2 * n, dtype=np.int64)),
+            "chrom": chrom,
+            "pos": pos,
+        }
+    )
+
+
+NEIGHBOUR_SQL = """
+WITH b AS (
+  SELECT eid, chrom, pos, pos // {width} AS blk FROM ends
+), p AS (
+              SELECT eid, chrom, pos, blk     AS kb FROM b
+    UNION ALL SELECT eid, chrom, pos, blk - 1       FROM b
+    UNION ALL SELECT eid, chrom, pos, blk + 1       FROM b
+)
+SELECT a.eid AS eid, count(*) AS neighbours
+FROM b a JOIN p ON a.chrom = p.chrom AND a.blk = p.kb
+WHERE a.eid <> p.eid AND abs(a.pos - p.pos) <= {max_dist}
+GROUP BY a.eid
+"""
+
+
+def coverage_duckdb(ends, max_dist, method, n_proc=4, tmpdir=None, memory=None):
+    """Neighbours-within-`max_dist` per pair, as an equi-join over bucketed ends.
+
+    A bucket is `max_dist` wide, so every end within `max_dist` of another is in
+    that end's bucket or one either side; the probe side is emitted three times,
+    once per neighbouring bucket, and each ordered pair is therefore generated
+    exactly once.
+
+    Counts exclude the end itself but include the pair's *other* end when the
+    two are close enough, which is what the double loop does too.
+    """
+    if method not in ("sum", "max"):
+        raise ValueError("Unknown method: {}".format(method))
+
+    # `ends` holds both ends of every pair, side 1 first, so there are half as
+    # many pairs as rows.
+    n = ends.num_rows // 2
+    if n == 0:
+        return np.array([], dtype=np.int64)
+
+    con = duckdb_utils.setup_duckdb_connection(
+        temp_directory=tmpdir or None,
+        memory_limit=memory or None,
+        enable_progress_bar=False,
+        enable_profiling="no_output",
+        numb_threads=max(int(n_proc), 1),
+    )
+    try:
+        con.register("ends", ends)
+        found = con.execute(
+            NEIGHBOUR_SQL.format(width=max(int(max_dist), 1), max_dist=int(max_dist))
+        ).fetchnumpy()
+    finally:
+        con.close()
+
+    counts = np.zeros(2 * n, dtype=np.int64)
+    counts[found["eid"].astype(np.int64)] = found["neighbours"].astype(np.int64)
+
+    first, second = counts[:n], counts[n:]
+    # The +1 for the pair itself lands differently in the two methods: `sum`
+    # adds it once to the total, `max` adds it to each side before taking the
+    # larger. Not symmetric, but it is what `_filterbycov` does.
+    if method == "sum":
+        return first + second + 1
+    return np.maximum(first + 1, second + 1)
 
 
 def _add_pairs_to_stats(counter, table, columns, pair_types=None):
@@ -63,8 +166,11 @@ def filterbycov_pairs(
     max_cov=8,
     max_dist=500,
     method="max",
+    backend="duckdb",
+    n_proc=4,
     mark_multi=False,
     unmapped_chrom=pairsam_format.UNMAPPED_CHROM,
+    send_header_to="both",
     c1="chrom1",
     c2="chrom2",
     p1="pos1",
@@ -77,6 +183,13 @@ def filterbycov_pairs(
     **kwargs
 ):
     """Split `input_path` into low-coverage, high-coverage and unmapped pairs."""
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(
+            "unknown backend {!r}; expected one of {}".format(
+                backend, ", ".join(SUPPORTED_BACKENDS)
+            )
+        )
+
     header, reader = open_pairs(
         input_path,
         nproc_in=kwargs.get("nproc_in", 3),
@@ -135,17 +248,27 @@ def filterbycov_pairs(
 
     coverage = np.array([], dtype=np.int64)
     if mapped.num_rows:
-        chrom_ids, strand_ids = {}, {}
-        coverage = np.asarray(
-            _filterbycov(
-                _encode(mapped.column(c1).to_pylist(), chrom_ids),
-                mapped.column(p1).to_numpy(zero_copy_only=False),
-                _encode(mapped.column(c2).to_pylist(), chrom_ids),
-                mapped.column(p2).to_numpy(zero_copy_only=False),
+        if backend == "duckdb":
+            coverage = coverage_duckdb(
+                _ends_table(mapped, c1, p1, c2, p2),
                 max_dist,
                 method,
+                n_proc=n_proc,
+                tmpdir=kwargs.get("tmpdir"),
+                memory=kwargs.get("memory"),
             )
-        )
+        else:
+            chrom_ids = {}
+            coverage = np.asarray(
+                _filterbycov(
+                    _encode(mapped.column(c1).to_pylist(), chrom_ids),
+                    mapped.column(p1).to_numpy(zero_copy_only=False),
+                    _encode(mapped.column(c2).to_pylist(), chrom_ids),
+                    mapped.column(p2).to_numpy(zero_copy_only=False),
+                    max_dist,
+                    method,
+                )
+            )
 
     is_high = coverage > max_cov
     low_rows = mapped.filter(pa.array(~is_high)) if mapped.num_rows else mapped
@@ -158,13 +281,23 @@ def filterbycov_pairs(
         ]
         _add_pairs_to_stats(counter, mapped, stat_columns, pair_types=pair_types)
 
-    with PairsWriter(output, new_header, **writer_kwargs) as writer:
+    with PairsWriter(
+        output,
+        new_header,
+        write_header=send_header_to in ("both", "lowcov"),
+        **writer_kwargs
+    ) as writer:
         writer.write(low_rows)
 
     if output_highcov:
         if mark_multi and high_rows.num_rows:
             high_rows = _mark_as_duplicates(high_rows, column_names)
-        with PairsWriter(output_highcov, new_header, **writer_kwargs) as writer:
+        with PairsWriter(
+            output_highcov,
+            new_header,
+            write_header=send_header_to in ("both", "highcov"),
+            **writer_kwargs
+        ) as writer:
             writer.write(high_rows)
 
     if counter is not None:

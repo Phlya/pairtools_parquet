@@ -11,6 +11,7 @@ chromosome, ``[0] + [end + 1 for each fragment]``, sorted.
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.csv as pacsv
 from pairtools.lib import headerops, pairsam_format
 
@@ -58,32 +59,54 @@ def load_rfrags(frags_path):
         [("chrom", "ascending"), ("start", "ascending"), ("end", "ascending")]
     )
 
-    chroms = np.asarray(table.column("chrom").to_pylist(), dtype=object)
-    ends = table.column("end").to_numpy(zero_copy_only=False)
-    if len(chroms) == 0:
+    if table.num_rows == 0:
         return {}
 
-    borders = np.r_[
-        0, 1 + np.where(chroms[:-1] != chroms[1:])[0], len(chroms)
-    ]
+    # The BED can be millions of rows, so the chromosome column is compared as
+    # integer codes rather than as Python strings -- the table is already
+    # sorted, so run boundaries are just where the code changes.
+    codes, names = chrom_codes(table.column("chrom"))
+    ends = table.column("end").to_numpy(zero_copy_only=False)
+
+    borders = np.r_[0, 1 + np.where(codes[:-1] != codes[1:])[0], len(codes)]
     return {
-        chroms[i]: np.concatenate([[0], ends[i:j] + 1])
+        names[codes[i]]: np.concatenate([[0], ends[i:j] + 1])
         for i, j in zip(borders[:-1], borders[1:])
     }
 
 
-def annotate_side(chroms, positions, rfrags, warned):
+def chrom_codes(column):
+    """Dictionary-encode a chromosome column into (integer codes, names).
+
+    Everything downstream then works on small integers: the distinct values are
+    the dictionary, so there is no ``np.unique`` over 5.6M strings, and
+    selecting one chromosome's rows is an integer comparison rather than an
+    elementwise comparison of Python string objects.
+    """
+    encoded = pc.dictionary_encode(column)
+    if isinstance(encoded, pa.ChunkedArray):
+        encoded = encoded.combine_chunks()
+    codes = (
+        pc.fill_null(encoded.indices, -1)
+        .to_numpy(zero_copy_only=False)
+        .astype(np.int64)
+    )
+    return codes, encoded.dictionary.to_pylist()
+
+
+def annotate_side(column, positions, rfrags, warned):
     """Return (index, start, end) arrays for one side of every pair in a batch.
 
     Unmapped sides, and sides on a chromosome with no annotated fragments, get
     the unannotated sentinels -- as `find_rfrag` is written to do.
     """
-    n = len(chroms)
+    codes, names = chrom_codes(column)
+    n = len(codes)
     index = np.full(n, pairsam_format.UNANNOTATED_RFRAG, dtype=np.int64)
     start = np.full(n, pairsam_format.UNMAPPED_POS, dtype=np.int64)
     end = np.full(n, pairsam_format.UNMAPPED_POS, dtype=np.int64)
 
-    for chrom in np.unique(chroms):
+    for code, chrom in enumerate(names):
         if chrom == pairsam_format.UNMAPPED_CHROM:
             continue
         if chrom not in rfrags:
@@ -97,7 +120,7 @@ def annotate_side(chroms, positions, rfrags, warned):
             continue
 
         sites = rfrags[chrom]
-        mask = chroms == chrom
+        mask = codes == code
         idx = np.minimum(
             np.maximum(0, np.searchsorted(sites, positions[mask], "right") - 1),
             len(sites) - 2,
@@ -144,11 +167,12 @@ def restrict_pairs(
             table = pa.Table.from_batches([batch])
             annotations = []
             for chrom_col, pos_col in (("chrom1", "pos1"), ("chrom2", "pos2")):
-                chroms = np.asarray(
-                    table.column(chrom_col).to_pylist(), dtype=object
-                )
                 positions = table.column(pos_col).to_numpy(zero_copy_only=False)
-                annotations.extend(annotate_side(chroms, positions, rfrags, warned))
+                annotations.extend(
+                    annotate_side(
+                        table.column(chrom_col), positions, rfrags, warned
+                    )
+                )
 
             writer.write(
                 pa.Table.from_arrays(

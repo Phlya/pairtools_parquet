@@ -36,9 +36,14 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
 from . import arrowio, duckdb_utils
+from .._logging import get_logger
 from .arrowio import PairsWriter, open_pairs
 from .chunking import rechunk
 from .duckdbio import quote_identifier
+from .select import read_chrom_subset
+from .stats import parse_filters, restrict_to_chroms
+
+logger = get_logger()
 
 UTIL_NAME = "pairtools_parquet_dedup"
 
@@ -465,6 +470,12 @@ def dedup_pairs(
     output_dups=None,
     output_unmapped=None,
     output_stats=None,
+    output_bytile_stats=None,
+    filters=None,
+    chrom_subset=None,
+    startup_code="",
+    type_cast=(),
+    engine="pandas",
     max_mismatch=3,
     method="max",
     backend="duckdb",
@@ -475,6 +486,7 @@ def dedup_pairs(
     keep_parent_id=False,
     extra_col_pair=(),
     unmapped_chrom="!",
+    send_header_to="both",
     c1="chrom1",
     c2="chrom2",
     p1="pos1",
@@ -503,6 +515,16 @@ def dedup_pairs(
         pairtools.
     output_stats : str, optional
         Where to write the duplication statistics.
+    output_bytile_stats : str, optional
+        Where to write by-tile duplication statistics. Implies
+        `keep_parent_id`, which the analysis reads the parent's tile from.
+    filters : list of str, optional
+        ``name:condition`` filters over the statistics, as `--filter` takes.
+    chrom_subset : str, optional
+        A chromsizes file naming the chromosomes the statistics should
+        describe. Affects the statistics only, not what is written out.
+        `pairtools dedup` declares this option but never reads it; see
+        UPSTREAM.md.
     """
     if backend not in SUPPORTED_BACKENDS:
         raise NotImplementedError(
@@ -512,6 +534,13 @@ def dedup_pairs(
         )
     if chunksize is None:
         chunksize = DEFAULT_CHUNKSIZE[backend]
+
+    bytile_dups = bool(output_bytile_stats)
+    if bytile_dups and not keep_parent_id:
+        logger.warning(
+            "Force output --keep-parent-id because --output-bytile-stats provided."
+        )
+        keep_parent_id = True
 
     header = arrowio.read_header(
         input_path,
@@ -529,7 +558,18 @@ def dedup_pairs(
         # returns that same list, so it has to be handed a copy.
         dups_header = headerops.append_columns(list(out_header), ["parent_readID"])
 
-    stats = PairCounter() if output_stats else None
+    filter_map, first_filter_name = parse_filters(filters, yaml)
+    stats = None
+    if output_stats or bytile_dups:
+        stats = PairCounter(
+            bytile_dups=bytile_dups,
+            filters=filter_map,
+            startup_code=startup_code,
+            type_cast=type_cast,
+            engine=engine,
+        )
+    stats_chroms = read_chrom_subset(chrom_subset) if chrom_subset else None
+
     dups_to_main_output = bool(output_dups) and str(output_dups) == str(output)
 
     writers = {}
@@ -544,10 +584,16 @@ def dedup_pairs(
         writers["out"] = PairsWriter(
             output,
             dups_header if dups_to_main_output else out_header,
+            write_header=send_header_to in ("both", "dedup"),
             **writer_kwargs
         )
         if output_dups and not dups_to_main_output:
-            writers["dups"] = PairsWriter(output_dups, dups_header, **writer_kwargs)
+            writers["dups"] = PairsWriter(
+                output_dups,
+                dups_header,
+                write_header=send_header_to in ("both", "dups"),
+                **writer_kwargs
+            )
         if output_unmapped:
             writers["unmapped"] = PairsWriter(
                 output_unmapped, dups_header, **writer_kwargs
@@ -565,6 +611,7 @@ def dedup_pairs(
             carryover=carryover,
             extra_col_pair=extra_col_pair,
             unmapped_chrom=unmapped_chrom,
+            stats_chroms=stats_chroms,
             c1=c1, c2=c2, p1=p1, p2=p2, s1=s1, s2=s2,
         )
         run = _dedup_duckdb if backend == "duckdb" else _dedup_pandas
@@ -581,9 +628,13 @@ def dedup_pairs(
         for writer in writers.values():
             writer.close()
 
-    if stats is not None:
+    if output_bytile_stats:
+        with open(output_bytile_stats, "w") as f:
+            stats.save_bytile_dups(f)
+
+    if output_stats:
         with open(output_stats, "w") as f:
-            stats.save(f, yaml=yaml)
+            stats.save(f, yaml=yaml, filter=None if yaml else first_filter_name)
 
 
 def _dedup_pandas(input_path, writers, stats, backend, n_proc, marking, **kwargs):
@@ -622,7 +673,10 @@ def _dedup_pandas(input_path, writers, stats, backend, n_proc, marking, **kwargs
 
     for df in marked:
         if stats is not None:
-            stats.add_pairs_from_dataframe(df, unmapped_chrom=unmapped_chrom)
+            stats.add_pairs_from_dataframe(
+                restrict_to_chroms(df, marking["stats_chroms"], c1, c2),
+                unmapped_chrom=unmapped_chrom,
+            )
 
         mask_mapped = np.logical_and(
             (df[c1] != unmapped_chrom), (df[c2] != unmapped_chrom)
@@ -755,7 +809,10 @@ def _write_marked(input_path, writers, stats, is_dup, parents, marking, **kwargs
 
         if stats is not None:
             stats.add_pairs_from_dataframe(
-                table.to_pandas(), unmapped_chrom=unmapped_chrom
+                restrict_to_chroms(
+                    table.to_pandas(), marking["stats_chroms"], c1, c2
+                ),
+                unmapped_chrom=unmapped_chrom,
             )
 
         mapped = pc.and_(

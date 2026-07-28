@@ -230,6 +230,61 @@ The pandas engine goes through `DataFrame.eval`, which cannot call
 Since that is the default, `evaluate_df` fails on most real conditions. We pass
 `engine="python"`, which matches `evaluate_stream`'s semantics.
 
+### `--chrom-subset` is accepted and then ignored by `stats` and `dedup`
+
+Both commands declare the option:
+
+```
+--chrom-subset  A path to a chromosomes file ... If provided, additionally
+                filter pairs with both sides originating from the provided
+                subset of chromosomes. This operation modifies the
+                #chromosomes: and #chromsize: header fields accordingly.
+```
+
+`cli/stats.py` takes it as a named parameter and never reads it; `cli/dedup.py`
+lets it fall into `**kwargs`, which is only ever consulted for `filter`,
+`startup_code`, `type_cast`, `engine`, `yaml` and the I/O options. So neither
+the filtering nor the header rewriting happens, and the statistics silently
+describe the whole file. There is no warning — the numbers just answer a
+different question than the one asked.
+
+`pairtools select` implements the same option properly, so the pieces exist:
+`headerops.subset_chroms_in_pairsheader` for the header, and a both-sides
+membership test for the rows.
+
+We implement the documented behaviour in both commands, so this is a deliberate
+divergence: `pairtools_parquet stats --chrom-subset` reports fewer pairs than
+`pairtools stats --chrom-subset` does. Suggested patch: implement it upstream,
+or drop the option rather than accept it.
+
+### `_filterbycov` ships the "slow version ... for testing purposes only"
+
+`lib/filterbycov.py:_filterbycov` opens with:
+
+```python
+"""
+This is a slow version of the filtering code used for testing purposes only
+Use cythonized version in the future!!
+"""
+```
+
+The cythonized version never arrived, so this is what `pairtools filterbycov`
+actually runs: a Python double loop over the 2N ends of N pairs. It is 95s of
+the 110s `filterbycov` takes on 5.6M pairs.
+
+The computation is a neighbour count -- for each end, how many other ends lie
+within `max_dist` on the same chromosome -- which is the same shape as `dedup`'s
+search and can be a bucketed equi-join: with buckets `max_dist` wide, two ends
+within `max_dist` are in the same bucket or an adjacent one. We do that in
+DuckDB and it is 7.4x faster end to end, byte-identical, with `_filterbycov`
+kept as `--backend python` and tested against.
+
+Worth noting for whoever writes the cython version: the `+1` for the pair itself
+is not applied symmetrically between the two methods. `sum` adds it once to the
+total (`count1 + count2 + 1`) while `max` adds it to each side before comparing
+(`max(count1 + 1, count2 + 1)`). That looks accidental, but changing it would
+change results, so we reproduce it.
+
 ## Version constraints we work around
 
 ### `parse --drop-seq` and `--add-columns seq` segfault against pysam 0.24

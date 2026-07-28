@@ -480,3 +480,64 @@ def test_exact_dedup_under_a_memory_limit_gives_the_same_answer(tmp_path):
 def _sort_key(line):
     f = line.split("\t")
     return (f[1], f[3], int(f[2]), int(f[4]))
+
+
+def test_dedup_filter_matches_pairtools(tmp_path, sorted_duplicated_pairs):
+    """--filter drives pairtools' own PairCounter, so the stats must match."""
+    reference = tmp_path / "ref.yaml"
+    ours = tmp_path / "ours.yaml"
+    condition = 'unique:(pair_type=="UU")'
+
+    run_pairtools(
+        "dedup", "--yaml", "--filter", condition, "--output-stats", reference,
+        "-o", tmp_path / "ref.pairs", sorted_duplicated_pairs
+    )
+    run_cli(
+        "dedup", "--yaml", "--filter", condition, "--output-stats", ours,
+        "-o", tmp_path / "ours.pairs", sorted_duplicated_pairs
+    )
+
+    def body(path):
+        with open(path) as f:
+            return [l for l in f if not l.startswith("#")]
+
+    assert body(reference) == body(ours)
+
+
+@pytest.mark.parametrize(
+    "send_to,main_has,dups_has",
+    [("both", True, True), ("dedup", True, False),
+     ("dups", False, True), ("none", False, False)],
+)
+def test_send_header_to_selects_which_text_output_gets_one(
+    tmp_path, sorted_duplicated_pairs, send_to, main_has, dups_has
+):
+    main = tmp_path / "main.pairs"
+    dups = tmp_path / "dups.pairs"
+    run_cli(
+        "dedup", "--send-header-to", send_to, "-o", main,
+        "--output-dups", dups, sorted_duplicated_pairs
+    )
+
+    assert bool(read_pairs_header(main)) is main_has
+    assert bool(read_pairs_header(dups)) is dups_has
+    # The rows are unaffected either way.
+    assert read_pairs_body(main), "dedup should keep some pairs"
+
+
+def test_send_header_to_none_leaves_parquet_readable(tmp_path, sorted_duplicated_pairs):
+    """A .parquet keeps its header whatever --send-header-to says.
+
+    There the header is key-value metadata rather than leading lines, and a
+    file without it cannot be read back as pairs at all -- so the option is
+    text-only, and this pins that the parquet stays usable.
+    """
+    out = tmp_path / "out.parquet"
+    run_cli(
+        "dedup", "--send-header-to", "none", "-o", out, sorted_duplicated_pairs
+    )
+
+    back = tmp_path / "back.pairs"
+    run_cli("parquet-to-csv", "-o", back, out)
+    assert read_pairs_header(back)
+    assert read_pairs_body(back)

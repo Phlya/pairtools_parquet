@@ -10,6 +10,8 @@ merged file still sorted.
 """
 
 import glob
+import os
+import tempfile
 
 from pairtools.lib import headerops
 
@@ -18,6 +20,10 @@ from .arrowio import PairsWriter
 from .sort import DEFAULT_SORT_KEYS, quote_identifier
 
 UTIL_NAME = "pairtools_parquet_merge"
+
+#: Inputs merged in one pass, matching `pairtools merge`. Beyond this the merge
+#: is staged through temporary files.
+DEFAULT_MAX_NMERGE = 8
 
 
 def expand_paths(patterns):
@@ -54,6 +60,7 @@ def merge_pairs(
     output,
     concatenate=False,
     keep_first_header=False,
+    max_nmerge=DEFAULT_MAX_NMERGE,
     nproc=8,
     tmpdir=None,
     memory=None,
@@ -75,6 +82,11 @@ def merge_pairs(
         unsorted. Mirrors `pairtools merge --concatenate`.
     keep_first_header : bool
         Take the first input's header instead of merging all of them.
+    max_nmerge : int
+        How many inputs to merge in one pass. Beyond this the merge is staged
+        through temporary Parquet files, as `pairtools merge` stages through
+        temporary text files, so a fan-in of thousands does not need every
+        input open at once. Pass 0 for no limit.
     """
     nproc_in = kwargs.get("nproc_in", 3)
     cmd_in = kwargs.get("cmd_in", None)
@@ -96,6 +108,83 @@ def merge_pairs(
     else:
         out_header = merged_header(headers, util_name=util_name)
 
+    path_headers = _headers_for(paths, headers)
+
+    if max_nmerge and len(paths) > max_nmerge:
+        # The header is computed once, from the real inputs, and handed to every
+        # stage -- so a staged merge writes exactly what a single-pass one would
+        # rather than accumulating a @PG record per stage.
+        _merge_staged(
+            paths, path_headers, output, out_header, max_nmerge,
+            concatenate=concatenate, nproc=nproc, tmpdir=tmpdir, memory=memory,
+            compress_program=compress_program, row_group_size=row_group_size,
+            **kwargs
+        )
+        return
+
+    _merge_files(
+        paths, path_headers, output, out_header,
+        concatenate=concatenate, nproc=nproc, tmpdir=tmpdir, memory=memory,
+        compress_program=compress_program, row_group_size=row_group_size,
+        **kwargs
+    )
+
+
+def _merge_staged(
+    paths, path_headers, output, out_header, max_nmerge, tmpdir=None, **kwargs
+):
+    """Merge in rounds, storing each round's result in a temporary file.
+
+    Parquet for the intermediates: it round-trips the header and the column
+    types without reparsing, which is the whole reason the staging is cheap
+    here where `pairtools merge` pays for text on every round.
+    """
+    with tempfile.TemporaryDirectory(dir=tmpdir or None) as stage_dir:
+        round_number = 0
+        while len(paths) > max_nmerge:
+            merged, merged_headers = [], []
+            for i in range(0, len(paths), max_nmerge):
+                group = paths[i : i + max_nmerge]
+                if len(group) == 1:
+                    merged.append(group[0])
+                    merged_headers.append(path_headers[i])
+                    continue
+                part = os.path.join(
+                    stage_dir, "round{}-{}.parquet".format(round_number, i)
+                )
+                _merge_files(
+                    group,
+                    path_headers[i : i + max_nmerge],
+                    part,
+                    out_header,
+                    tmpdir=tmpdir,
+                    **kwargs
+                )
+                merged.append(part)
+                merged_headers.append(out_header)
+            paths, path_headers = merged, merged_headers
+            round_number += 1
+
+        _merge_files(
+            paths, path_headers, output, out_header, tmpdir=tmpdir, **kwargs
+        )
+
+
+def _merge_files(
+    paths,
+    path_headers,
+    output,
+    out_header,
+    concatenate=False,
+    nproc=8,
+    tmpdir=None,
+    memory=None,
+    compress_program="auto",
+    row_group_size=None,
+    **kwargs
+):
+    """Merge `paths` into `output` under an already-decided header."""
+    nproc_in = kwargs.get("nproc_in", 3)
     columns = headerops.extract_column_names(out_header)
     projection = ", ".join(quote_identifier(col) for col in columns)
 
@@ -117,7 +206,7 @@ def merge_pairs(
             # Column names are projected explicitly: UNION ALL matches by
             # position, and all_same_columns only guarantees the same set.
             parts = []
-            for path, path_header in zip(paths, _headers_for(paths, headers)):
+            for path, path_header in zip(paths, path_headers):
                 parts.append(
                     "SELECT {} FROM {}".format(
                         projection,
