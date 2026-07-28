@@ -116,6 +116,20 @@ def test_chunked_loop_matches_compute_scaling(pairs):
         )
 
 
+def test_scaling_of_a_file_with_no_pairs(tmp_path, pairs):
+    """A header with no data rows still has a scaling: a table of zeros."""
+    from conftest import read_pairs_header, write_pairs
+
+    empty = write_pairs(tmp_path / "empty.pairs", read_pairs_header(pairs), [])
+    reference = tmp_path / "ref.tsv"
+    ours = tmp_path / "ours.tsv"
+
+    run_pairtools("scaling", "-o", reference, empty)
+    run_cli("scaling", "-o", ours, empty)
+
+    assert read(reference) == read(ours)
+
+
 def test_scaling_writes_to_stdout(pairs):
     """An empty --output means stdout, as it does upstream."""
     assert run_cli("scaling", pairs).startswith("chrom1\t")

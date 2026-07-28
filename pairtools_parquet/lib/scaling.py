@@ -109,7 +109,26 @@ def scaling_chunks(input_path, chunksize=DEFAULT_CHUNKSIZE, nproc_in=3, cmd_in=N
         nproc_in=nproc_in,
         cmd_in=cmd_in,
     )
-    return rechunk((batch.to_pandas() for batch in reader), chunksize)
+    schema = reader.schema
+    return _at_least_one_chunk(
+        rechunk((batch.to_pandas() for batch in reader), chunksize), schema
+    )
+
+
+def _at_least_one_chunk(chunks, schema):
+    """Yield `chunks`, or a single empty frame if there were none.
+
+    A file with a header and no data rows still has a scaling: `pd.read_csv`
+    hands pairtools one empty chunk for it, and pairtools answers with a table
+    of zeros. An Arrow reader yields no batches at all for that file, so the
+    empty frame has to be put back or the loop would have nothing to bin.
+    """
+    empty = True
+    for chunk in chunks:
+        empty = False
+        yield chunk
+    if empty:
+        yield schema.empty_table().to_pandas()
 
 
 def scaling_pairs(
