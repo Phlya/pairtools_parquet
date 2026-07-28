@@ -108,6 +108,7 @@ def open_pairs(
     block_size=DEFAULT_BLOCK_SIZE,
     nproc_in=3,
     cmd_in=None,
+    column_names=None,
 ):
     """Open a .pairs or .parquet file as a stream of Arrow record batches.
 
@@ -125,6 +126,13 @@ def open_pairs(
         Bytes per block, for text input. pyarrow sizes text batches by bytes.
     nproc_in, cmd_in
         Passed to ``pairtools.lib.fileio.auto_open`` for text input.
+    column_names : list of str, optional
+        Read the columns positionally under these names, ignoring whatever the
+        file calls them -- and, for text, whether it names them at all. This is
+        what lets ``header generate`` put a header on a headerless file, and
+        ``header set-columns`` rename the columns of one that has them. Column
+        types follow the given names, since that is all a .pairs field's type
+        is ever derived from.
 
     Returns
     -------
@@ -136,11 +144,28 @@ def open_pairs(
     """
     if is_parquet(path):
         header, batches, fallback = _open_parquet(path, columns, batch_size)
+        if column_names is not None:
+            batches, fallback = _rename(batches, fallback, column_names, path)
     else:
         header, batches, fallback = _open_text(
-            path, columns, block_size, nproc_in, cmd_in
+            path, columns, block_size, nproc_in, cmd_in, column_names
         )
     return header, _reader_from_batches(batches, fallback)
+
+
+def _rename(batches, fallback, column_names, path):
+    """Rename the columns of every batch, positionally."""
+    column_names = list(column_names)
+    if len(fallback) != len(column_names):
+        raise ValueError(
+            "{} has {} columns, but {} names were given: {}".format(
+                path, len(fallback), len(column_names), ", ".join(column_names)
+            )
+        )
+    renamed = pa.schema(
+        [field.with_name(name) for field, name in zip(fallback, column_names)]
+    )
+    return (batch.rename_columns(column_names) for batch in batches), renamed
 
 
 def _reader_from_batches(batches, fallback_schema):
@@ -184,14 +209,19 @@ def _open_parquet(path, columns, batch_size):
     return header, batches(), fallback
 
 
-def _open_text(path, columns, block_size, nproc_in, cmd_in):
+def _open_text(path, columns, block_size, nproc_in, cmd_in, column_names=None):
     instream = fileio.auto_open(path, mode="r", nproc=nproc_in, command=cmd_in)
-    header, instream = headerops.get_header(instream)
-    column_names = headerops.extract_column_names(header)
+    # A caller that supplied the column names is not relying on the file to
+    # declare them, so a headerless input is not worth warning about.
+    header, instream = headerops.get_header(
+        instream, ignore_warning=column_names is not None
+    )
+    if column_names is None:
+        column_names = headerops.extract_column_names(header)
     if not column_names:
         raise ValueError(
             "{} has no '#columns:' header line, so its columns are unknown; "
-            "add one with `pairtools header generate`".format(path)
+            "add one with `pairtools_parquet header generate`".format(path)
         )
 
     schema = schema_from_columns(column_names)
@@ -308,8 +338,12 @@ class PairsWriter:
             sink_file = output_file
 
         sink = pa.output_stream(sink_file)
+        # Only the line terminator is stripped, not trailing whitespace:
+        # `headerops.get_header` keeps trailing spaces, and pairtools emits at
+        # least one line that ends in one (`#genome_assembly: ` with no
+        # assembly given), so stripping them would break byte parity.
         sink.write(
-            "".join(line.rstrip() + "\n" for line in self.header).encode("utf-8")
+            "".join(line.rstrip("\n") + "\n" for line in self.header).encode("utf-8")
         )
 
         self._writer = self._stack.enter_context(

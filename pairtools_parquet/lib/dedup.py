@@ -25,39 +25,12 @@ from pairtools.lib.stats import PairCounter
 
 from . import arrowio
 from .arrowio import PairsWriter, open_pairs
+from .chunking import rechunk
 
 UTIL_NAME = "pairtools_parquet_dedup"
 
 #: Backends that work on DataFrames, and so can be driven from Arrow batches.
 SUPPORTED_BACKENDS = ("scipy", "sklearn")
-
-
-def rechunk(frames, chunksize):
-    """Re-cut an iterable of DataFrames into frames of exactly `chunksize` rows.
-
-    The last frame is whatever is left over.
-    """
-    buffered = []
-    buffered_rows = 0
-
-    for frame in frames:
-        buffered.append(frame)
-        buffered_rows += len(frame)
-
-        while buffered_rows >= chunksize:
-            combined = (
-                buffered[0] if len(buffered) == 1 else pd.concat(buffered, axis=0)
-            )
-            combined = combined.reset_index(drop=True)
-            yield combined.iloc[:chunksize].reset_index(drop=True)
-
-            leftover = combined.iloc[chunksize:].reset_index(drop=True)
-            buffered = [leftover] if len(leftover) else []
-            buffered_rows = len(leftover)
-
-    if buffered_rows:
-        combined = buffered[0] if len(buffered) == 1 else pd.concat(buffered, axis=0)
-        yield combined.reset_index(drop=True)
 
 
 def mark_duplicate_chunks(

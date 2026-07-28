@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 ### Added
+- `header`, ported from `pairtools header`, with all four subcommands —
+  `generate`, `transfer`, `set-columns` and `validate-columns`. Headers cross
+  formats: the header of a `.parquet` file can be transferred onto a `.pairs`
+  file and back. Unlike upstream, `--output` is required, since Parquet has no
+  meaningful stdout form.
+- `scaling`, ported from `pairtools scaling`. Only six columns take part in the
+  binning, so Parquet input reads six columns instead of the whole file. The
+  binning itself is pairtools' own `bins_pairs_by_distance`.
 - `phase`, ported from `pairtools phase`, in both XB and XA tag modes, with
   `--clean-output` and `--report-scores`.
 - `filterbycov`, ported from `pairtools filterbycov`. The coverage calculation
@@ -64,6 +72,15 @@
   `read_csv` reads an empty field as NULL by default, but `.pairs` has no null:
   an empty field is the empty string, and `phase` reads an empty `XB` tag as
   "no alternative alignment".
+- Header lines no longer lose their trailing whitespace when written as text.
+  `pairtools header generate` with no `--assembly` emits `#genome_assembly: `
+  with a trailing space, and `headerops.get_header` keeps it, so stripping it
+  broke byte parity for a file pairtools wrote. Parquet was unaffected, which
+  stores the header verbatim.
+- `header set-columns` adds a `#columns:` line to a file that has none.
+  Upstream's `headerops.set_columns` only rewrites a line already present, so
+  its set-columns is a no-op on exactly the headerless input it exists for.
+  Another deliberate divergence; see UPSTREAM.md.
 - Text output is now compressed only when the output extension says so, as
   `pairtools` does. `-o out.pairs` previously produced a gzip-compressed file
   named `.pairs` unless `--compress-program none` was passed explicitly.

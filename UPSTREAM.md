@@ -120,6 +120,26 @@ We delegate to `do_merge`, so we inherit the behaviour rather than papering
 over it; `tests/test_stats.py` compares merged stats as sets of lines and says
 why.
 
+### `header set-columns` does nothing to a file with no `#columns:` line
+
+`headerops.set_columns` only rewrites a line that is already there:
+
+```python
+for i in range(len(header)):
+    if header[i].startswith("#columns:"):
+        header[i] = "#columns:" + SEP_COLS + SEP_COLS.join(columns)
+return header
+```
+
+so on a headerless file — the input the command exists for — it returns the
+empty header unchanged, and `pairtools header set-columns` writes out a file
+with no header at all, exit code 0. Appending the line when it is absent would
+fix it.
+
+**We deliberately diverge here**: `lib/header.py:set_columns` adds the line,
+laid out exactly as `headerops.set_columns` lays it out. Pinned by
+`test_set_columns_adds_a_missing_columns_line`.
+
 ### `headerops.append_columns` mutates its argument
 
 It rewrites the `#columns` line of the list it is passed and returns that same
@@ -167,3 +187,35 @@ as its input and `.to_csv(outstream)` as its output. Taking an iterable of
 DataFrames instead — with the current signature kept as a thin wrapper that
 builds one from a stream — would let any caller feed it Arrow batches without
 reimplementing the carryover logic that surrounds `_dedup_chunk`.
+
+### `compute_scaling` should accept the chunk iterator it already loops over
+
+`lib/scaling.py:compute_scaling` iterates over chunks internally:
+
+```python
+for pairs_chunk in [pairs_df] if isinstance(pairs_df, pd.DataFrame) else pairs_df:
+```
+
+but its entry point accepts only a DataFrame or a path/file-like object and
+raises `ValueError` for anything else, so an iterable of DataFrames — which is
+what the loop wants — cannot be passed in. Widening that dispatch by one branch
+would let `lib/scaling.py` here call `compute_scaling` instead of restating the
+loop around `bins_pairs_by_distance`.
+
+`tests/test_scaling.py:test_chunked_loop_matches_compute_scaling` pins our loop
+against `compute_scaling` run on a whole file, so the two cannot drift while
+the local copy exists.
+
+## Rough edges we match rather than fix
+
+### Chunked `scaling` reports pair counts as floats
+
+`compute_scaling` combines per-chunk results with `DataFrame.add(fill_value=0)`,
+which promotes the integer `n_pairs` counts to `float64`. A file smaller than
+`--chunksize` is read in one chunk and never goes through `add`, so it reports
+`5`; the same file read in two chunks reports `5.0`. The counts are right either
+way, but the output of a command is not supposed to depend on a memory knob.
+
+We match it, which means matching pairtools' chunk boundaries exactly rather
+than Arrow's — see `lib/chunking.py`. Casting `n_pairs` back to `int64` after
+the loop would fix it upstream.

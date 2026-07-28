@@ -225,6 +225,50 @@ def test_empty_fields_stay_empty_strings_in_parquet(tmp_path):
     assert None not in values
 
 
+def test_header_keeps_trailing_whitespace(tmp_path):
+    """Only the newline is stripped from a header line, not trailing spaces.
+
+    `pairtools header generate` with no --assembly emits `#genome_assembly: `
+    with a trailing space, and `headerops.get_header` keeps it, so stripping it
+    on the way out would break byte parity for a file pairtools wrote.
+    """
+    header = ["## pairs format v1.0.0", "#genome_assembly: "] + HEADER[2:]
+    source = write_pairs(tmp_path / "spaced.pairs", header, [])
+    out = tmp_path / "out.pairs"
+
+    read_back, reader = open_pairs(source)
+    assert read_back == header
+    with PairsWriter(out, read_back, compress_program="none") as writer:
+        writer.write_all(reader)
+
+    with open(source, "rb") as a, open(out, "rb") as b:
+        assert a.read() == b.read()
+
+
+def test_column_names_override(tmp_path):
+    """`column_names` names the columns positionally, header or no header."""
+    rows = [("r1", "chr1", 1, "chr1", 2, "+", "+", "UU")]
+    names = ["readID", "chrom1", "pos5", "chrom2", "pos3", "strand1", "strand2",
+             "pair_type"]
+
+    headerless = write_pairs(tmp_path / "headerless.pairs", [], rows)
+    _, reader = open_pairs(headerless, column_names=names)
+    assert reader.schema.names == names
+    # the type follows the new name, not the old one
+    assert reader.schema.field("pos5").type == pa.int32()
+    assert read_all(reader)[0]["pos5"] == 1
+
+    # the same override applies to Parquet, whose columns are already named
+    _, reader = open_pairs(MOCK_PARQUET, column_names=names)
+    assert reader.schema.names == names
+    assert len(read_all(reader)) == 9
+
+
+def test_column_names_must_match_the_column_count(tmp_path):
+    with pytest.raises(ValueError, match="8 columns, but 2 names"):
+        open_pairs(MOCK_PARQUET, column_names=["a", "b"])
+
+
 def test_writer_casts_mismatched_batches(tmp_path):
     """A caller may hand over batches whose types differ from the schema."""
     header = HEADER

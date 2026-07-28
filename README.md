@@ -77,6 +77,10 @@ $ pip install -e .
 
 - `stats`: summary statistics, and merging of stats files.
 
+- `scaling`: contact frequency as a function of genomic distance. Reads only the six columns the binning looks at, so Parquet input skips the rest of the file.
+
+- `header`: `generate`, `transfer`, `set-columns` and `validate-columns`. Headers move between formats, so one generated onto a `.parquet` can be transferred onto a `.pairs` and back.
+
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
 
