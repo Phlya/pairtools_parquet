@@ -421,6 +421,62 @@ def test_exact_dedup_does_not_depend_on_input_order(tmp_path):
     assert len(kept["ordered"]) > 0
 
 
+@pytest.mark.parametrize("chunksize", [7, 101, 100000])
+def test_exact_dedup_ignores_the_chunk_size_on_unsorted_input(tmp_path, chunksize):
+    """--chunksize cannot change the exact answer, whatever order the file is in.
+
+    The exact path runs one aggregate over the whole key table, so there is no
+    window for a duplicate family to fall across -- reading the file in small
+    batches only changes how the rows arrive, not which of them are compared.
+    Together with the shuffle this is the property that lets exact dedup run on
+    a large unsorted file: chunking is a memory knob, not a semantic one.
+    """
+    import random
+
+    header = read_pairs_header(make_duplicated_pairs(tmp_path / "seed.pairs"))
+    body = read_pairs_body(tmp_path / "seed.pairs")
+    random.Random(5).shuffle(body)
+
+    shuffled = tmp_path / "shuffled.pairs"
+    with open(shuffled, "w") as f:
+        f.write("".join(l + "\n" for l in header + body))
+
+    whole = tmp_path / "whole.pairs"
+    run_cli("dedup", "--max-mismatch", "0", "-o", whole, shuffled)
+
+    chunked = tmp_path / "chunked.pairs"
+    run_cli(
+        "dedup", "--max-mismatch", "0", "--chunksize", str(chunksize),
+        "-o", chunked, shuffled
+    )
+
+    assert read_pairs_body(whole) == read_pairs_body(chunked)
+
+
+def test_exact_dedup_under_a_memory_limit_gives_the_same_answer(tmp_path):
+    """--memory bounds the footprint without bounding correctness.
+
+    Over the limit DuckDB spills the aggregate to --tmpdir rather than
+    comparing fewer rows, so the answer is the same one it gives unbounded.
+    This pins that both options are wired through to the connection; the spill
+    itself only happens on a file far larger than a test fixture.
+    """
+    pairs = make_duplicated_pairs(tmp_path / "seed.pairs")
+    spill = tmp_path / "spill"
+    spill.mkdir()
+
+    unbounded = tmp_path / "unbounded.pairs"
+    run_cli("dedup", "--max-mismatch", "0", "-o", unbounded, pairs)
+
+    bounded = tmp_path / "bounded.pairs"
+    run_cli(
+        "dedup", "--max-mismatch", "0", "--memory", "64M",
+        "--tmpdir", str(spill), "-o", bounded, pairs
+    )
+
+    assert read_pairs_body(unbounded) == read_pairs_body(bounded)
+
+
 def _sort_key(line):
     f = line.split("\t")
     return (f[1], f[3], int(f[2]), int(f[4]))

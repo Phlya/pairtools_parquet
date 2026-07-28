@@ -492,7 +492,9 @@ def dedup_pairs(
     Parameters
     ----------
     input_path : str
-        Input path; must be sorted, as `pairtools dedup` requires.
+        Input path. Must be sorted, as `pairtools dedup` requires -- except
+        with ``backend="duckdb"`` and ``max_mismatch=0``, where the answer does
+        not depend on the input's order.
     output : str
         Where the non-duplicate pairs go.
     output_dups, output_unmapped : str, optional

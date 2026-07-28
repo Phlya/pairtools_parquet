@@ -72,7 +72,24 @@ from . import cli, common_io_options
     type=int,
     default=None,
     help="Number of pairs in each chunk. Reduce for lower memory footprint. "
+    "Ignored with --backend duckdb --max-mismatch 0, which decides the whole "
+    "file in one pass and has no window to size. "
     "[default: 20000000 with --backend duckdb, 10000 otherwise] [dedup option]",
+)
+@click.option(
+    "--tmpdir",
+    type=str,
+    default="",
+    help="Custom temporary folder for duckdb to spill to when the key table "
+    "does not fit in --memory. [duckdb backend option]",
+)
+@click.option(
+    "--memory",
+    type=str,
+    default="",
+    help="Memory limit for the duckdb backend, e.g. '8G'. Above it duckdb "
+    "spills to --tmpdir rather than failing, and the answer is unchanged. "
+    "[default: duckdb's own, 80% of RAM] [duckdb backend option]",
 )
 @click.option(
     "--carryover",
@@ -208,6 +225,10 @@ def dedup(
     Find PCR/optical duplicates in an upper-triangular flipped sorted
     .pairs/.pairsam/.parquet file. Allow for a +/-N bp mismatch at each side of
     duplicated molecules.
+
+    With --backend duckdb --max-mismatch 0 the input need not be sorted: exact
+    equality is transitive, so the answer does not depend on the order rows
+    arrive in. Every other combination requires sorted input, as pairtools does.
 
     PAIRS_PATH : input triu-flipped sorted .pairs/.pairsam/.parquet file.
     """

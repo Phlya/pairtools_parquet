@@ -63,7 +63,7 @@ $ pip install -e .
 
 - `dedup`: find and remove PCR/optical duplicates, with statistics. Byte-identical output, `--backend scipy` restores pairtools' KD-tree implementation.
 
-  - **`--max-mismatch 0` (exact): 7.3x faster** — 50.8s → 7.0s on 5.6M pairs. Exact equality is transitive, so each group of identical pairs is already a cluster and no graph is needed; the detection itself is 2.1s and the rest is I/O. This path does not care what order the file is in, so it needs no sort — and unlike `pairtools dedup`, which only compares within a chunk, it gives the same answer on a shuffled file as on a sorted one.
+  - **`--max-mismatch 0` (exact): 7.3x faster** — 50.8s → 7.0s on 5.6M pairs. Exact equality is transitive, so each group of identical pairs is already a cluster and no graph is needed; the detection itself is 2.1s and the rest is I/O. This path does not care what order the file is in, so it needs no sort — and unlike `pairtools dedup`, which only compares within a chunk, it gives the same answer on a shuffled file as on a sorted one. It never chunks the detection either, so file size does not reintroduce a boundary: `--chunksize` is ignored, and where the key table outgrows `--memory` DuckDB spills to `--tmpdir` rather than comparing fewer rows.
   - **Default `--max-mismatch 3`: 6.4x faster** — 62.2s → 9.7s. A 3bp tolerance makes this a lookup in a 3bp window rather than a nearest-neighbour search, so bucketing on `(chrom1, chrom2, strand1, strand2, pos1 // r)` turns it into an equi-join. Rows at identical positions are collapsed first, which keeps the edge list linear rather than quadratic in the duplication rate.
 
 - `flip`: reflect pairs onto the upper triangle, given a chromosome order.

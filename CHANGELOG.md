@@ -15,6 +15,14 @@
   `pairtools dedup` compares only within a chunk and misses most of them —
   197,802 reads reported unique against a true 194,189 on a 200k-row shuffled
   file, and 18x slower doing it.
+  This holds however large the file is, because the exact path never chunks the
+  detection: one aggregate answers the whole file, so there is no window for a
+  duplicate family to fall across. `--chunksize` is ignored on this path — a
+  5.6M-row shuffled file gives byte-identical output at 1,000, 250,000 and
+  20,000,000. What bounds the file size is memory, and DuckDB spills rather than
+  changing the answer: the same file capped at `--memory 200M` produces the same
+  bytes. Those two knobs, `--memory` and `--tmpdir`, are now on `dedup` as they
+  already were on `sort`.
 - `dedup --backend duckdb`, now the default, is **6.4x faster than `pairtools
   dedup`** (62.2s -> 9.7s on 5.6M pairs, 4 threads) and produces byte-identical
   output. `--max-mismatch` is 3bp by default and dedup input is sorted, so
