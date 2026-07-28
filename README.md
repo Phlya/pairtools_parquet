@@ -92,13 +92,17 @@ Every tool takes `.pairs`, `.pairs.gz`, `.parquet` or `.arrow` as input and writ
 
 ## Composing commands
 
-`-` means stdin as an input and stdout as an output, so the tools pipe:
+Omit `-o` and it writes to stdout; omit the input path and it reads stdin, as
+in pairtools. So the tools pipe with nothing extra to say:
 
 ```sh
-pairtools_parquet select 'pair_type=="UU"' -o - in.pairs \
-  | pairtools_parquet sort -o - - \
-  | pairtools_parquet markasdup -o out.pairs -
+pairtools_parquet select 'pair_type=="UU"' in.pairs \
+  | pairtools_parquet sort \
+  | pairtools_parquet markasdup -o out.pairs
 ```
+
+`-` says the same thing explicitly, and is what you need when a command takes
+several inputs — `merge a.pairs -` reads the second from the pipe.
 
 `-o -` writes .pairs. To keep the data binary on the wire, use `-.arrow`:
 the Arrow IPC *stream* format has no footer, so unlike Parquet it can be read
@@ -111,9 +115,11 @@ pairtools_parquet select 'pair_type=="UU"' -o -.arrow in.parquet \
   | pairtools_parquet markasdup -o out.pairs -
 ```
 
-`dedup` is the one tool that cannot read a pipe — it reads the pairs twice,
-once to find the duplicates and once to write them out — and says so rather
-than producing nothing.
+`dedup` reads the pairs twice, once to find the duplicates and once to write
+them out, which a pipe cannot serve directly — so it spools the stream to a
+temporary Parquet file and works from that. It costs about what writing a
+Parquet intermediate yourself would cost, because that is what it is; the
+difference is not having to manage it.
 
 **Arrow through a pipe is the fastest way to compose**, because it skips both
 the text encoding and the disk, and because the stages then run at the same

@@ -6,8 +6,8 @@ from . import cli, common_io_options
 
 
 @cli.command()
-@click.argument("input_path", type=str, nargs=-1, required=True)
-@click.option("-o", "--output", type=str, required=True, help="output stats tsv file.")
+@click.argument("input_path", type=str, nargs=-1, required=False)
+@click.option("-o", "--output", type=str, default="", help="output stats tsv file.")
 @click.option(
     "--merge",
     is_flag=True,

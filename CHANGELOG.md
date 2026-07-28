@@ -186,6 +186,22 @@
   it to SQL, so the condition language is whatever pairtools supports.
 
 ### Fixed
+- `-o` defaults to stdout and the input path to stdin, as they do in pairtools,
+  so a pipeline needs no `-` at all:
+  `select '...' in.pairs | sort | markasdup -o out.pairs`. Both were required
+  arguments here, which meant every composed command had to spell out `-o -`
+  and a trailing `-`. pairtools reads `not path or path == "-"`, and an empty
+  path, no path and `-` now all mean the standard stream here too.
+- `dedup` reads stdin, by spooling it. It needs two passes over the pairs --
+  one to find the duplicates, one to write them out with the answer applied --
+  which a pipe cannot give it, so the stream is written to a temporary Parquet
+  file and deduplicated from there. Parquet because the second pass is then a
+  native DuckDB scan over a compressed, seekable file, which is what the
+  algorithm wants anyway; the temporary file lands in `--tmpdir` when one is
+  given. The cost is one extra write and read, which is what writing a Parquet
+  intermediate by hand would have cost: `markasdup | dedup` over 5.6M pairs
+  takes 10.5-12.0s through a pipe against 11.0-11.4s through a Parquet file.
+  It used to read the spent stream and write an empty file, reporting success.
 - `-` works in both directions, so the tools can be composed with pipes:
   `select ... -o - in.pairs | sort -o - - | markasdup -o - -`. Text only —
   Parquet's footer is written at the end of the file, so it cannot go to a

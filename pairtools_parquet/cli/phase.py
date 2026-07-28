@@ -6,9 +6,9 @@ from . import cli, common_io_options
 
 
 @cli.command()
-@click.argument("pairs_path", type=str, required=True)
+@click.argument("pairs_path", type=str, required=False)
 @click.option(
-    "-o", "--output", type=str, required=True,
+    "-o", "--output", type=str, default="",
     help="output file. The format follows the extension: .pairs, .pairs.gz or .parquet.",
 )
 @click.option(

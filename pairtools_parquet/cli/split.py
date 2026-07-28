@@ -6,7 +6,7 @@ from . import cli, common_io_options
 
 
 @cli.command()
-@click.argument("pairsam_path", type=str, required=True)
+@click.argument("pairsam_path", type=str, required=False)
 @click.option(
     "--output-pairs",
     type=str,

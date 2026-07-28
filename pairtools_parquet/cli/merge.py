@@ -11,7 +11,7 @@ from . import cli, common_io_options
     "-o",
     "--output",
     type=str,
-    required=True,
+    default="",
     help="output file."
     " The format follows the extension: .pairs, .pairs.gz or .parquet.",
 )

@@ -118,17 +118,66 @@ def test_a_pipeline_of_three_tools(tmp_path, mock_pairs_path, mock_bytes):
         assert body(piped.stdout.decode()) == body(f.read())
 
 
-def test_dedup_refuses_stdin_rather_than_emitting_nothing(tmp_path, mock_bytes):
-    """dedup needs two passes, which a pipe cannot give it.
+def test_dedup_reads_stdin_by_spooling_it(tmp_path, mock_pairs_path, mock_bytes):
+    """dedup needs two passes, which a pipe cannot give it directly.
 
-    It used to read the spent stream and write an empty file, reporting
-    success -- the worst way to be wrong.
+    So the stream is written to a temporary Parquet file and deduplicated from
+    there. What matters is that the answer is the one a file would have given;
+    it used to read the spent stream and write an empty file, reporting
+    success.
     """
-    proc = run(["dedup", "-o", tmp_path / "out.pairs", "-"],
-               stdin=mock_bytes, check=False)
+    from_file = tmp_path / "from_file.pairs"
+    from_stdin = tmp_path / "from_stdin.pairs"
+    run(["dedup", "-o", from_file, mock_pairs_path])
+    run(["dedup", "-o", from_stdin, "-"], stdin=mock_bytes)
 
-    assert proc.returncode != 0
-    assert "cannot read from stdin" in proc.stderr.decode()
+    with open(from_file) as f:
+        expected = body(f.read())
+    with open(from_stdin) as f:
+        assert body(f.read()) == expected
+    assert expected, "the fixture deduplicated to nothing, so this proves little"
+
+
+def test_output_defaults_to_stdout(tmp_path, mock_pairs_path):
+    """No -o means stdout, as it does in pairtools."""
+    proc = run(["select", 'pair_type=="UU"', mock_pairs_path], cwd=tmp_path)
+
+    assert proc.stdout.startswith(b"## pairs format")
+    assert body(proc.stdout.decode())
+    assert not (tmp_path / "-").exists()
+
+
+def test_input_defaults_to_stdin(tmp_path, mock_pairs_path, mock_bytes):
+    """No input path means stdin, as it does in pairtools."""
+    out = tmp_path / "out.pairs"
+    run(["select", 'pair_type=="UU"', "-o", out], stdin=mock_bytes)
+
+    reference = tmp_path / "ref.pairs"
+    run(["select", 'pair_type=="UU"', "-o", reference, mock_pairs_path])
+    with open(out) as f, open(reference) as g:
+        assert body(f.read()) == body(g.read())
+
+
+def test_a_pipeline_with_no_dashes_at_all(tmp_path, mock_pairs_path):
+    """The defaults are what make the pipeline read like pairtools'."""
+    piped = subprocess.run(
+        "{py} -m pairtools_parquet select 'pair_type==\"UU\"' {inp} "
+        "| {py} -m pairtools_parquet sort "
+        "| {py} -m pairtools_parquet markasdup".format(
+            py=sys.executable, inp=mock_pairs_path
+        ),
+        shell=True, capture_output=True, cwd=str(tmp_path),
+    )
+    assert piped.returncode == 0, piped.stderr.decode()
+
+    expected = tmp_path / "staged.pairs"
+    step1 = tmp_path / "s1.pairs"
+    step2 = tmp_path / "s2.pairs"
+    run(["select", 'pair_type=="UU"', "-o", step1, mock_pairs_path])
+    run(["sort", "-o", step2, step1])
+    run(["markasdup", "-o", expected, step2])
+    with open(expected) as f:
+        assert body(piped.stdout.decode()) == body(f.read())
 
 
 def test_merge_accepts_a_mix_of_stdin_and_files(tmp_path, mock_pairs_path,

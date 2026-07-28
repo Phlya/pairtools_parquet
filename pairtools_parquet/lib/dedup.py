@@ -25,6 +25,9 @@ pairtools uses -- labels 2M edges in under 0.1s.
 The pandas backend is kept as the reference the DuckDB one is tested against.
 """
 
+import os
+import tempfile
+
 import numpy as np
 import pandas as pd
 import pyarrow as pa
@@ -438,7 +441,7 @@ def _scatter(values, positions, length):
     return pa.array(out, type=pa.string())
 
 
-def dedup_pairs(
+def _dedup_pairs(
     input_path,
     output,
     output_dups=None,
@@ -515,16 +518,6 @@ def dedup_pairs(
             "Force output --keep-parent-id because --output-bytile-stats provided."
         )
         keep_parent_id = True
-
-    # Deduplication reads the input twice -- once to find the duplicates, once
-    # to write the rows out with the answer applied -- and a pipe can only be
-    # read once. Refusing is the only honest option: reading a spent stream
-    # would report every pair as a duplicate of nothing and emit an empty file.
-    if str(input_path) == arrowio.STDIO_PATH:
-        raise ValueError(
-            "dedup cannot read from stdin: it needs two passes over the pairs, "
-            "so the input has to be a file it can reopen"
-        )
 
     header = arrowio.read_header(
         input_path,
@@ -817,3 +810,44 @@ def _write_marked(input_path, writers, stats, is_dup, parents, marking, **kwargs
             writers["out"].write(
                 table.filter(pc.and_(mapped, pc.invert(mask))).select(columns)
             )
+
+
+def _spool(input_path, destination, nproc_in=3, cmd_in=None):
+    """Copy a stream to a Parquet file that can be read as many times as needed."""
+    header, reader = open_pairs(input_path, nproc_in=nproc_in, cmd_in=cmd_in)
+    with PairsWriter(destination, header, schema=reader.schema) as writer:
+        writer.write_all(reader)
+    return destination
+
+
+def dedup_pairs(input_path, *args, **kwargs):
+    """Find and remove duplicates, spooling stdin to a file first if need be.
+
+    Deduplication reads the pairs twice -- once to find the duplicates, once to
+    write the rows out with the answer applied -- and a pipe can only be read
+    once. Rather than refuse a stream, the stream is written to a temporary
+    Parquet file and deduplicated from there, so `dedup` composes like every
+    other tool. Parquet because the second pass is then a native DuckDB scan
+    over a compressed, seekable file, which is what the algorithm wants anyway.
+
+    The cost is one extra write and read of the input, and the temporary file
+    lands in --tmpdir when one is given.
+    """
+    if not arrowio.is_stdio(input_path):
+        return _dedup_pairs(input_path, *args, **kwargs)
+
+    with tempfile.TemporaryDirectory(
+        prefix="pairtools-parquet-dedup-", dir=kwargs.get("tmpdir") or None
+    ) as directory:
+        spooled = os.path.join(directory, "input.parquet")
+        logger.info(
+            "dedup needs two passes over the pairs, which a stream cannot give "
+            "it; spooling the input to %s", spooled
+        )
+        _spool(
+            input_path,
+            spooled,
+            nproc_in=kwargs.get("nproc_in", 3),
+            cmd_in=kwargs.get("cmd_in", None),
+        )
+        return _dedup_pairs(spooled, *args, **kwargs)

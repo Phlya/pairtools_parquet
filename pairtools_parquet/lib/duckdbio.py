@@ -102,9 +102,9 @@ def scan_sql(path, header, nproc_in=3, chrom_type=None, row_number=False):
     :func:`arrowio.with_row_ids`, so this raises rather than returning a scan
     whose ordinal would be wrong.
     """
-    path = str(path)
-    if path == "-":
+    if arrowio.is_stdio(path):
         raise ValueError("DuckDB cannot read a .pairs stream from stdin by path")
+    path = str(path)
 
     columns = headerops.extract_column_names(header)
 
@@ -167,7 +167,7 @@ def scan_sql(path, header, nproc_in=3, chrom_type=None, row_number=False):
 def can_scan_natively(path):
     """Whether :func:`scan_sql` can handle `path`."""
     path = str(path)
-    return path != "-" and (
+    return not arrowio.is_stdio(path) and (
         arrowio.is_parquet(path)
         or path.endswith((".pairs", ".pairs.gz", ".pairsam", ".pairsam.gz"))
     )

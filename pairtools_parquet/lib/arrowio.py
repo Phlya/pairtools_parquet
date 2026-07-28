@@ -80,12 +80,16 @@ def is_arrow(path):
 def is_stdio(path):
     """Whether `path` names the standard stream rather than a file.
 
-    ``-`` is the .pairs stream both tools agree on. ``-.arrow`` is the same
-    stream carrying Arrow IPC instead: a stream has no name to hang an
-    extension on, and giving one to ``-`` keeps the format in the path where
-    every other format already lives, rather than in a flag that would have to
-    be threaded through every tool.
+    ``-`` is the .pairs stream both tools agree on, and so are an empty path
+    and no path at all -- `pairtools` reads ``not path or path == "-"``, which
+    is what makes an omitted ``-o`` mean stdout. ``-.arrow`` is the same stream
+    carrying Arrow IPC instead: a stream has no name to hang an extension on,
+    and giving one to ``-`` keeps the format in the path where every other
+    format already lives, rather than in a flag that would have to be threaded
+    through every tool.
     """
+    if not path:
+        return True
     path = str(path)
     return path == STDIO_PATH or path.startswith(STDIO_PATH + ".")
 
@@ -391,7 +395,7 @@ def _open_parquet(path, columns, batch_size):
 def _open_text(path, columns, block_size, nproc_in, cmd_in, column_names=None):
     # A caller that supplied the column names is not relying on the file to
     # declare them, so a headerless input is not worth warning about.
-    if str(path) == STDIO_PATH:
+    if is_stdio(path):
         header, instream = _open_stdin(
             nproc_in, cmd_in, ignore_warning=column_names is not None
         )

@@ -22,7 +22,7 @@ from . import cli, common_io_options
     "-o",
     "--output",
     type=str,
-    required=True,
+    default="",
     help="output file with pairs. The format follows the extension: .pairs,"
     " .pairs.gz, .pairsam or .parquet.",
 )
