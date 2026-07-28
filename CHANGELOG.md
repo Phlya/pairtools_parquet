@@ -5,6 +5,33 @@
 
 ## [Unreleased]
 ### Added
+- Arrow IPC as a third format, written and read wherever `.pairs` and
+  `.parquet` are: `-o mid.arrow`, and `-o -.arrow` for the standard stream.
+  Parquet writes its footer last, so it cannot be read until it is complete and
+  therefore cannot go through a pipe; the Arrow IPC *stream* format has no
+  footer, so it can. The .pairs header rides in the schema metadata exactly as
+  it does in Parquet, and the two agree line for line.
+  Input needs nothing declared. An Arrow stream opens with the continuation
+  token `ff ff ff ff` and .pairs text with `#`, so the first four bytes settle
+  it; `-` accepts either. `-.arrow` on output keeps the format in the path,
+  where every other format already lives, rather than in a flag that would have
+  had to be threaded through all eighteen tools.
+  This turns out to be the fastest way to compose commands, which is not what
+  the previous entry predicted. `select | sort | markasdup` over 5.6M pairs,
+  same source and same final output:
+
+      Arrow pipes     12.7-13.0s
+      Parquet files   14.5-14.8s   116 MB of intermediates
+      text pipes      14.9-16.2s
+      Arrow files     15.9-16.4s   457 MB
+      text files      ~40s cold    401 MB
+
+  A pipe still cannot be seeked, so it still gives up column projection and
+  parallel scanning -- but it also skips the text encoding and the disk, and
+  the stages run at the same time rather than one after another, which more
+  than pays for the loss. Arrow *files* are the worst of both: uncompressed on
+  disk and no pipelining. Parquet remains the right choice for anything worth
+  keeping.
 - `benchmarks/`, so every speedup in the README can be reproduced rather than
   taken on trust. `python benchmarks/run.py` generates a dataset, times each
   tool three ways — `pairtools` text-to-text, ours text-to-text, ours
@@ -180,11 +207,12 @@
   `merge` (including a mix of files and stdin), `restrict`, `stats`, `scaling`
   and `filterbycov` all give the same answer from a pipe as from a file, which
   `tests/test_stdio.py` now checks by comparing the two.
-  Worth knowing when composing: writing Parquet between steps is still faster
-  than piping text, because a pipe cannot be seeked and so gives up both column
-  projection and parallel scanning. `select | sort | dedup` over 5.6M pairs
-  takes 24.6s through Parquet files against 34.6s through text, with
-  intermediates a third the size.
+  Worth knowing when composing: piping *text* is not the fast path. A pipe
+  cannot be seeked, so it gives up both column projection and parallel
+  scanning, and text costs an encode and a decode on top -- `select | sort |
+  dedup` over 5.6M pairs takes 24.6s through Parquet files against 34.6s
+  through text files. Piping Arrow is a different matter; see the Arrow IPC
+  entry above.
 - `merge` is now a merge rather than a sort, and gives the same answer whatever
   format its inputs are in. Rows tied on all five sort keys came out in a
   different order from Parquet input than from text — and in a different order

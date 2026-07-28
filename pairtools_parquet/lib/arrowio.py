@@ -38,6 +38,16 @@ DEFAULT_BLOCK_SIZE = 1 << 24
 
 PARQUET_SUFFIXES = (".parquet", ".pq")
 
+#: Arrow IPC *stream* format, which -- unlike Parquet, whose footer is written
+#: last -- can be read as it arrives, so it is the one binary format that can
+#: go through a pipe.
+ARROW_SUFFIXES = (".arrow", ".ipc")
+
+#: First bytes of an Arrow IPC stream: the continuation token that precedes
+#: every message. .pairs text always starts with '#', so the two cannot be
+#: confused, and an input stream can be recognised rather than declared.
+ARROW_STREAM_MAGIC = b"\xff\xff\xff\xff"
+
 #: The path that means stdin on the way in and stdout on the way out.
 STDIO_PATH = "-"
 
@@ -48,6 +58,11 @@ STDIO_PATH = "-"
 #: unknowable.
 _stdin_state = None
 
+#: The same, for an Arrow stream: opening it reads the schema -- and so the
+#: header -- without touching the batches, so a tool can ask for the header
+#: first and still get every row afterwards.
+_stdin_arrow = None
+
 #: Extensions pairtools' auto_open treats as compressed.
 COMPRESSED_SUFFIXES = (".gz", ".bz2", ".lz4")
 
@@ -55,6 +70,24 @@ COMPRESSED_SUFFIXES = (".gz", ".bz2", ".lz4")
 def is_parquet(path):
     """Whether `path` names a Parquet file, by extension."""
     return str(path).lower().endswith(PARQUET_SUFFIXES)
+
+
+def is_arrow(path):
+    """Whether `path` names an Arrow IPC stream, by extension."""
+    return str(path).lower().endswith(ARROW_SUFFIXES)
+
+
+def is_stdio(path):
+    """Whether `path` names the standard stream rather than a file.
+
+    ``-`` is the .pairs stream both tools agree on. ``-.arrow`` is the same
+    stream carrying Arrow IPC instead: a stream has no name to hang an
+    extension on, and giving one to ``-`` keeps the format in the path where
+    every other format already lives, rather than in a flag that would have to
+    be threaded through every tool.
+    """
+    path = str(path)
+    return path == STDIO_PATH or path.startswith(STDIO_PATH + ".")
 
 
 def compresses_by_extension(path):
@@ -67,7 +100,13 @@ def read_header(path, nproc_in=3, cmd_in=None):
     if is_parquet(path):
         return headerio.read_header(path)
 
-    if str(path) == STDIO_PATH:
+    if is_arrow(path) and not is_stdio(path):
+        with pa.ipc.open_stream(path) as reader:
+            return headerio.metadata_to_header(reader.schema.metadata)
+
+    if is_stdio(path):
+        if _stdin_holds_arrow():
+            return headerio.metadata_to_header(_open_stdin_arrow().schema.metadata)
         return list(_open_stdin(nproc_in, cmd_in)[0])
 
     instream = fileio.auto_open(path, mode="r", nproc=nproc_in, command=cmd_in)
@@ -175,11 +214,57 @@ def open_pairs(
         header, batches, fallback = _open_parquet(path, columns, batch_size)
         if column_names is not None:
             batches, fallback = _rename(batches, fallback, column_names, path)
+    elif is_arrow(path) or (is_stdio(path) and _stdin_holds_arrow()):
+        header, batches, fallback = _open_arrow(path, columns)
+        if column_names is not None:
+            batches, fallback = _rename(batches, fallback, column_names, path)
     else:
         header, batches, fallback = _open_text(
             path, columns, block_size, nproc_in, cmd_in, column_names
         )
     return header, _reader_from_batches(batches, fallback)
+
+
+def _stdin_holds_arrow():
+    """Whether what is waiting on stdin is an Arrow stream rather than text.
+
+    Peeked, not consumed, so the reader that follows still sees the first
+    bytes. A stream already claimed by either reader is not re-examined.
+    """
+    if _stdin_arrow is not None:
+        return True
+    if _stdin_state is not None:
+        return False
+    try:
+        return sys.stdin.buffer.peek(4)[:4] == ARROW_STREAM_MAGIC
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _open_stdin_arrow():
+    """Open stdin as an Arrow stream once, and keep the reader."""
+    global _stdin_arrow
+    if _stdin_arrow is None:
+        _stdin_arrow = pa.ipc.open_stream(sys.stdin.buffer)
+    return _stdin_arrow
+
+
+def _open_arrow(path, columns):
+    """Read an Arrow IPC stream, from a file or from stdin."""
+    reader = _open_stdin_arrow() if is_stdio(path) else pa.ipc.open_stream(path)
+    header = headerio.metadata_to_header(reader.schema.metadata)
+
+    if not columns:
+        return header, reader, reader.schema
+
+    projected = pa.schema([reader.schema.field(name) for name in columns])
+    batches = (
+        pa.RecordBatch.from_arrays(
+            [batch.column(name) for name in columns], names=list(columns)
+        )
+        for batch in reader
+    )
+    return header, batches, projected
 
 
 class _keep_open(io.RawIOBase):
@@ -403,6 +488,8 @@ class PairsWriter:
         try:
             if self._is_parquet:
                 self._open_parquet(compression)
+            elif is_arrow(self.path):
+                self._open_arrow()
             else:
                 self._open_text(compress_program, nproc_out)
         except Exception:
@@ -418,12 +505,26 @@ class PairsWriter:
             )
         )
 
+    def _open_arrow(self):
+        """Write an Arrow IPC stream, to a file or to stdout.
+
+        The header rides in the schema metadata, exactly as it does in
+        Parquet, so a stream carries everything a file would.
+        """
+        if is_stdio(self.path):
+            sink = self._stack.enter_context(_keep_open(sys.stdout.buffer))
+        else:
+            sink = self._stack.enter_context(open(self.path, "wb"))
+        self._writer = self._stack.enter_context(
+            pa.ipc.new_stream(sink, headerio.apply_to_schema(self.schema, self.header))
+        )
+
     def _open_text(self, compress_program, nproc_out):
         # Imported here so this module's import graph stays free of the DuckDB
         # side of the package.
         from .csv_parquet_converter import choose_compressor
 
-        if self.path == STDIO_PATH:
+        if is_stdio(self.path):
             # `-` is a stream, so there is no extension to decide compression
             # from and nothing to reopen -- pipe through a compressor yourself
             # if you want one, exactly as `pairtools <tool> -o -` requires.

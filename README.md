@@ -88,7 +88,7 @@ $ pip install -e .
 
 - `split`: separate a `.pairsam` back into pairs and SAM. From Parquet, `--output-pairs` alone reads only the columns it writes, skipping `sam1`/`sam2` entirely. From text there is no such saving — every column has to be parsed either way, and `pairtools split` is faster there, since it splits lines rather than typing fields.
 
-Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
+Every tool takes `.pairs`, `.pairs.gz`, `.parquet` or `.arrow` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
 ## Composing commands
 
@@ -97,26 +97,40 @@ Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichev
 ```sh
 pairtools_parquet select 'pair_type=="UU"' -o - in.pairs \
   | pairtools_parquet sort -o - - \
-  | pairtools_parquet markasdup -o - out.pairs
+  | pairtools_parquet markasdup -o out.pairs -
 ```
 
-A pipe carries text: Parquet writes its footer at the end of the file, so it
-cannot be streamed, and `-o -` always means `.pairs`. `dedup` is the one tool
-that cannot read a pipe — it reads the pairs twice, once to find the duplicates
-and once to write them out — and says so rather than producing nothing.
+`-o -` writes .pairs. To keep the data binary on the wire, use `-.arrow`:
+the Arrow IPC *stream* format has no footer, so unlike Parquet it can be read
+as it arrives. Input needs no flag either way — a stream starting with Arrow's
+continuation token is Arrow, and .pairs text always starts with `#`.
 
-**Writing Parquet between steps is faster than piping**, which is worth knowing
-before building a pipeline around `-`. A pipe cannot be seeked, so it gives up
-the two things Parquet is quick for: reading only the columns a tool needs, and
-scanning with every thread. `select | sort | dedup` over 5.6M pairs:
+```sh
+pairtools_parquet select 'pair_type=="UU"' -o -.arrow in.parquet \
+  | pairtools_parquet sort -o -.arrow - \
+  | pairtools_parquet markasdup -o out.pairs -
+```
 
-| | total | intermediate size |
+`dedup` is the one tool that cannot read a pipe — it reads the pairs twice,
+once to find the duplicates and once to write them out — and says so rather
+than producing nothing.
+
+**Arrow through a pipe is the fastest way to compose**, because it skips both
+the text encoding and the disk, and because the stages then run at the same
+time instead of one after another. `select | sort | markasdup` over 5.6M pairs,
+same source and same final output, differing only in what goes between:
+
+| between steps | time | intermediate size |
 |---|---|---|
-| Parquet files between steps | **24.6s** | 134 MB |
-| text files between steps | 34.6s | 401 MB |
+| **Arrow pipes** | **12.7–13.0s** | — |
+| Parquet files | 14.5–14.8s | 116 MB |
+| Arrow files | 15.9–16.4s | 457 MB |
+| text pipes | 14.9–16.2s | — |
+| text files | ~40s cold | 401 MB |
 
-So pipes are for convenience and for keeping the disk clean; Parquet files are
-for speed.
+Arrow *files* are the worst of both: uncompressed on disk and no pipelining.
+Use Parquet when a step's output is worth keeping, and `-.arrow` when it is
+not.
 
 
 ## Benchmarks
