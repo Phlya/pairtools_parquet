@@ -1,6 +1,6 @@
 # pairtools_parquet
 
-[![Documentation Status](https://readthedocs.org/projects/pairs_to_parquet/badge/?version=latest)](https://pairs-to-parquet.readthedocs.io/en/latest/)
+[![Documentation Status](https://readthedocs.org/projects/pairtools-parquet/badge/?version=latest)](https://pairtools-parquet.readthedocs.io/en/latest/)
 [![Join the chat on Slack](https://img.shields.io/badge/chat-slack-%233F0F3F?logo=slack)](https://bit.ly/2UaOpAe)
 
 
@@ -44,8 +44,8 @@ Currently there is only 1 option for installing `pairtools_parquet`:
 And it is the same, when you want to modify `pairtools_parquet`: build `pairtools_parquet` from source via pip's "editable" mode:
 
 ```sh
-$ git clone https://github.com/ayaksvals/pairs_to_parquet
-$ cd pairs_to_parquet
+$ git clone https://github.com/Phlya/pairtools_parquet
+$ cd pairtools_parquet
 $ pip install -e .
 ```
 

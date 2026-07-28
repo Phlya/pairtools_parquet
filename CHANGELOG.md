@@ -213,6 +213,13 @@
 - **Renamed the package from `pairs_to_parquet` to `pairtools_parquet`**, along
   with the CLI entry point and the `@PG` provenance records it writes. This is a
   breaking change for imports and for the command name.
+- Project URLs now point at `Phlya/pairtools_parquet` and
+  `pairtools-parquet.readthedocs.io`, following the repository rename. They
+  pointed at `ayaksvals/pairs_to_parquet`, the upstream this was forked from,
+  which is neither where this work lives nor reachable under the new name. The
+  `Changelog` URL was also broken independently of the rename — it pointed at
+  `/issues/blob/master/CHANGES.md`, a path with an extra `issues/` segment and
+  the wrong filename.
 
 ### Fixed
 - `pairtools_parquet.lib` was missing an `__init__.py` and so was dropped from

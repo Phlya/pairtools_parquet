@@ -56,11 +56,11 @@ doc = [
 
 
 [project.urls]
-Homepage = "https://github.com/ayaksvals/pairs_to_parquet"
-Documentation = "https://pairs-to-parquet.readthedocs.io/en/latest/"
-Repository = "https://github.com/ayaksvals/pairs_to_parquet.git"
-Issues = "https://github.com/ayaksvals/pairs_to_parquet/issues"
-Changelog = "https://github.com/ayaksvals/pairs_to_parquet/issues/blob/master/CHANGES.md"
+Homepage = "https://github.com/Phlya/pairtools_parquet"
+Documentation = "https://pairtools-parquet.readthedocs.io/en/latest/"
+Repository = "https://github.com/Phlya/pairtools_parquet.git"
+Issues = "https://github.com/Phlya/pairtools_parquet/issues"
+Changelog = "https://github.com/Phlya/pairtools_parquet/blob/master/CHANGELOG.md"
 
 
 [project.scripts]
