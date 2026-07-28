@@ -61,7 +61,7 @@ $ pip install -e .
 
 - `merge`: merge sorted files, keeping them sorted. Inputs may be a mix of formats.
 
-- `dedup`: find and remove PCR/optical duplicates, with statistics. Byte-identical output, `--backend scipy` restores pairtools' KD-tree implementation.
+- `dedup`: find and remove PCR/optical duplicates, with statistics. `--backend scipy` restores pairtools' KD-tree implementation and reproduces its output exactly; the default backend differs from it only by keeping near-duplicate chains that `pairtools dedup` cuts at its chunk boundaries — about one row per million pairs (UPSTREAM.md).
 
   - **`--max-mismatch 0` (exact): 7.3x faster** — 50.8s → 7.0s on 5.6M pairs. Exact equality is transitive, so each group of identical pairs is already a cluster and no graph is needed; the detection itself is 2.1s and the rest is I/O. This path does not care what order the file is in, so it needs no sort — and unlike `pairtools dedup`, which only compares within a chunk, it gives the same answer on a shuffled file as on a sorted one. It never chunks the detection either, so file size does not reintroduce a boundary: `--chunksize` is ignored, and where the key table outgrows `--memory` DuckDB spills to `--tmpdir` rather than comparing fewer rows.
   - **Default `--max-mismatch 3`: 6.4x faster** — 62.2s → 9.7s. A 3bp tolerance makes this a lookup in a 3bp window rather than a nearest-neighbour search, so bucketing on `(chrom1, chrom2, strand1, strand2, pos1 // r)` turns it into an equi-join. Rows at identical positions are collapsed first, which keeps the edge list linear rather than quadratic in the duplication rate.
@@ -93,8 +93,21 @@ Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichev
 
 ## Benchmarks
 
+Reproduce any of this with
+
+```sh
+python benchmarks/run.py
+```
+
+which generates its own dataset, times each tool against `pairtools`, and
+checks that both produced the same pairs — see [benchmarks/README.md](benchmarks/README.md)
+for running it on your own files, and for why the default data is generated
+rather than downloaded.
+
 Every tool against `pairtools` itself, on 5.6M pairs, 4 threads. "ours" is
-Parquet in and Parquet out; output is byte-identical to pairtools in every row.
+Parquet in and Parquet out; output is byte-identical to pairtools in every row,
+save for `dedup` at `--max-mismatch 3`, which keeps a handful of near-duplicate
+chains that `pairtools dedup` cuts at its chunk boundaries (UPSTREAM.md).
 
 | Tool | `pairtools` | ours | |
 |---|---|---|---|
@@ -115,6 +128,12 @@ Parquet in and Parquet out; output is byte-identical to pairtools in every row.
 the pairs then go through typed columns where `pairtools sample` only has to
 decide whether to copy a line. `split` from text input is slower for the same
 reason. Both are noted in their entries above.
+
+These ratios are not constants — they depend on the library. `filterbycov` in
+particular scales with how crowded the genome is: on a denser 1M-pair set from
+`benchmarks/run.py` it is 56x rather than 7.4x, because the cost being avoided
+is a per-pair loop over neighbours and there are more of them. Run the harness
+on your own data if the number matters to you.
 
 ## Why to use `.parquet` extention for sorting (and many more future processing tools)?
 If we use the same 2.4 GB file, 35 GB of memory, 4 threads:

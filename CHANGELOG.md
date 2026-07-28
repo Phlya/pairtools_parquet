@@ -5,6 +5,25 @@
 
 ## [Unreleased]
 ### Added
+- `benchmarks/`, so every speedup in the README can be reproduced rather than
+  taken on trust. `python benchmarks/run.py` generates a dataset, times each
+  tool three ways — `pairtools` text-to-text, ours text-to-text, ours
+  Parquet-to-Parquet — and compares the outputs, so a speedup that came from
+  doing less work fails the run instead of printing a good number. It takes
+  `--pairs`/`--bam` for your own files, `-t` for a subset of tools, `-r` for
+  repeats, and reports the interpreter startup cost so a table dominated by
+  imports can be recognised as one.
+  The dataset is generated rather than downloaded because published `.pairs`
+  files are contact lists, which is to say already deduplicated — `dedup` on
+  one measures how fast each implementation finds nothing — and the raw BAMs
+  behind them are not generally published. `make_data.py` builds a bwa-mem-like
+  BAM instead, with PCR duplicates introduced at the read level where PCR
+  introduces them, a `--dup-rate` you set, and Illumina read IDs carrying tile
+  coordinates; the pairs are `parse`d out of that BAM, so `parse` has real
+  input and the duplicates in the pairs are the library's own.
+  `tests/test_benchmarks.py` runs the harness end to end at a size that takes
+  seconds, and checks the fixture still has the properties the benchmark
+  depends on.
 - `tests/test_cli_parity.py`, which requires every pairtools command and option
   to exist here under the same name. Nothing checked this before, so a renamed
   option passed the whole suite — the rest of the tests call options by
@@ -78,6 +97,14 @@
   its lookback resolves clusters across a window boundary, so the answer does
   not depend on it. The default rises to 20,000,000 rows accordingly, and
   `-p/--n-proc` now sets DuckDB's thread count (default 4).
+  This is the one place the output is not byte-identical to pairtools', and
+  the benchmark harness now shows it on real-sized input: `pairtools dedup`
+  carries only *non*-duplicate rows into the next chunk, so a chain A~B~C split
+  over a boundary loses the B~C link when B was marked a duplicate of A, and C
+  is reported unique. Our lookback holds every row and re-decides them, so the
+  chain survives. On a 1M-pair library at a 15% duplicate rate it is one row.
+  `--backend scipy` and `--backend sklearn` reproduce pairtools exactly. See
+  UPSTREAM.md.
 - `parse` and `parse2`, ported from their pairtools counterparts. The parser is
   pairtools' own `streaming_classify`, called unchanged; only its output is
   redirected, from formatted text lines into Arrow batches. `parse -o x.parquet`
@@ -132,6 +159,19 @@
   it to SQL, so the condition language is whatever pairtools supports.
 
 ### Fixed
+- `stats` re-cuts its input to `--chunksize` rows before counting, so text and
+  Parquet input now produce identical output. Text batches are sized in bytes
+  and Parquet batches in rows, and `PairCounter.add_pairs_from_dataframe`
+  groups each chunk by chromosome pair with pandas — which sorts group keys —
+  so which chunk a pair landed in decided the order the `chrom_freq` lines were
+  written in. The counts were always right; the files did not `diff` clean
+  against `pairtools stats`, and now do. `dedup` and `scaling` already re-cut
+  their input for the same reason. Found by the new benchmark harness, which
+  compares outputs as well as timing them.
+  A consequence worth knowing: `--chunksize` now genuinely reaches text input,
+  and since the ordering follows chunk boundaries, a non-default `--chunksize`
+  reorders the `chrom_freq` lines (values unchanged). That is inherited from
+  pairtools, which hard-codes 100,000 and exposes no way to vary it.
 - `flip`'s chromosome-order file is `-c/--chroms-path`, as in pairtools. It was
   named `--chrom-subset` here, which is not only a different name but the name
   of an unrelated pairtools option — a filter, in `select`, `stats` and `dedup`.

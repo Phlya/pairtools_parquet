@@ -67,17 +67,45 @@ def test_stats_from_parquet(tmp_path, sorted_pairs):
 
 
 def test_stats_are_independent_of_chunksize(tmp_path, sorted_pairs):
-    """Counts are additive, so how the input is chunked must not matter.
+    """Counts are additive, so how the input is chunked must not change them.
 
-    `pairtools stats` has no --chunksize (it hard-codes 100_000), so this is
-    checked against ourselves rather than upstream.
+    The `chrom_freq` *lines* do move: `PairCounter.add_pairs_from_dataframe`
+    groups each chunk by chromosome pair and pandas sorts group keys, so which
+    chromosome pair is seen first -- and therefore the order the keys are
+    written in -- follows the chunk boundaries. That is inherited from
+    pairtools, which never shows it because it hard-codes 100_000 and offers no
+    --chunksize to vary. Matching its output at that default is the contract
+    here, so the ordering is compared as a set and the numbers exactly.
     """
     small = tmp_path / "small.stats"
     large = tmp_path / "large.stats"
     run_cli("stats", "--chunksize", "137", "-o", small, sorted_pairs)
     run_cli("stats", "--chunksize", "1000000", "-o", large, sorted_pairs)
 
-    assert read(small) == read(large)
+    assert sorted(read(small).splitlines()) == sorted(read(large).splitlines())
+
+    def without_chrom_freq(text):
+        return [l for l in text.splitlines() if not l.startswith("chrom_freq/")]
+
+    assert without_chrom_freq(read(small)) == without_chrom_freq(read(large))
+
+
+def test_stats_from_text_and_parquet_agree_across_chunks(tmp_path, sorted_pairs):
+    """The format an input is in must not change the output at all.
+
+    Text batches are cut by bytes and Parquet batches by rows, so before those
+    were re-cut to --chunksize the two paths chunked differently and wrote the
+    `chrom_freq` lines in different orders -- values identical, `diff` not.
+    """
+    as_parquet = tmp_path / "in.parquet"
+    run_cli("csv-to-parquet", "-o", as_parquet, sorted_pairs)
+
+    from_text = tmp_path / "text.stats"
+    from_parquet = tmp_path / "parquet.stats"
+    for source, output in [(sorted_pairs, from_text), (as_parquet, from_parquet)]:
+        run_cli("stats", "--chunksize", "137", "-o", output, source)
+
+    assert read(from_text) == read(from_parquet)
 
 
 def test_stats_merge_matches_pairtools(tmp_path, sorted_pairs):

@@ -15,6 +15,7 @@ from pairtools.lib.stats import PairCounter, do_merge
 
 from .._logging import get_logger
 from .arrowio import open_pairs
+from .chunking import rechunk
 from .select import read_chrom_subset
 
 UTIL_NAME = "pairtools_parquet_stats"
@@ -129,10 +130,19 @@ def stats_pairs(
         engine=engine,
     )
 
-    for batch in reader:
-        if chroms is not None:
-            batch = batch.filter(chrom_subset_mask(batch, chroms))
-        counter.add_pairs_from_dataframe(batch.to_pandas())
+    def frames():
+        for batch in reader:
+            if chroms is not None:
+                batch = batch.filter(chrom_subset_mask(batch, chroms))
+            yield batch.to_pandas()
+
+    # `add_pairs_from_dataframe` groups each chunk by chromosome pair, and
+    # pandas sorts group keys, so the order chromosome pairs appear in
+    # `chrom_freq` follows the chunk boundaries. Text batches are cut by bytes
+    # rather than rows, which would put those lines in a different order than
+    # `pairtools stats --chunksize` puts them for the same file.
+    for frame in rechunk(frames(), chunksize):
+        counter.add_pairs_from_dataframe(frame)
 
     # `extract_chromsizes` zips the parsed `#chromsize:` lines and indexes the
     # result without checking there were any, so it raises IndexError rather

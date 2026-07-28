@@ -285,6 +285,39 @@ total (`count1 + count2 + 1`) while `max` adds it to each side before comparing
 (`max(count1 + 1, count2 + 1)`). That looks accidental, but changing it would
 change results, so we reproduce it.
 
+### `dedup` breaks duplicate chains at chunk boundaries
+
+`streaming_dedup` searches for duplicates one `--chunksize` chunk at a time and
+bridges the boundary with a carryover buffer:
+
+```python
+df_nodups = df_marked.loc[~mask_duplicated, colnames]
+df_prev_nodups = df_nodups.tail(carryover).reset_index(drop=True)
+```
+
+Only rows that were *not* marked duplicates are carried into the next chunk.
+With `--max-mismatch` above 0 the duplicate relation is not transitive, so
+clusters are chains: A~B and B~C within `r`, A~C not. When such a chain
+straddles a boundary with B on the near side, B is marked a duplicate of A and
+dropped from the carryover, C never sees it, and C starts a cluster of its own.
+The pair is reported as unique when the same data read in one chunk reports it
+as a duplicate.
+
+Raising `--carryover` does not help, and cannot: the dropped row is a duplicate
+by construction, and no size of a buffer that holds only non-duplicates will
+contain it. The fix upstream is to carry over the last `carryover` rows of the
+chunk regardless of whether they were marked, tagging them so they are not
+re-emitted -- the `carryover` column already exists for exactly that purpose.
+
+We do not reproduce this. `--backend duckdb` also works in windows, but its
+lookback holds every row of the previous window rather than the surviving ones,
+and those rows are re-decided rather than only consulted -- so a chain reaching
+across a boundary stays joined, and the answer is the one the kernel would give
+if the file fit in a single chunk. `--backend scipy` and `--backend sklearn` run
+pairtools' `_dedup_chunk` under a copy of `streaming_dedup`'s loop, carryover
+semantics included, and match pairtools exactly. The difference is small but
+real: on a 1M-pair library with a 15% duplicate rate it is one row.
+
 ## Version constraints we work around
 
 ### `parse --drop-seq` and `--add-columns seq` segfault against pysam 0.24
