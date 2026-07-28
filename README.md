@@ -90,6 +90,34 @@ $ pip install -e .
 
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
+## Composing commands
+
+`-` means stdin as an input and stdout as an output, so the tools pipe:
+
+```sh
+pairtools_parquet select 'pair_type=="UU"' -o - in.pairs \
+  | pairtools_parquet sort -o - - \
+  | pairtools_parquet markasdup -o - out.pairs
+```
+
+A pipe carries text: Parquet writes its footer at the end of the file, so it
+cannot be streamed, and `-o -` always means `.pairs`. `dedup` is the one tool
+that cannot read a pipe — it reads the pairs twice, once to find the duplicates
+and once to write them out — and says so rather than producing nothing.
+
+**Writing Parquet between steps is faster than piping**, which is worth knowing
+before building a pipeline around `-`. A pipe cannot be seeked, so it gives up
+the two things Parquet is quick for: reading only the columns a tool needs, and
+scanning with every thread. `select | sort | dedup` over 5.6M pairs:
+
+| | total | intermediate size |
+|---|---|---|
+| Parquet files between steps | **24.6s** | 134 MB |
+| text files between steps | 34.6s | 401 MB |
+
+So pipes are for convenience and for keeping the disk clean; Parquet files are
+for speed.
+
 
 ## Benchmarks
 

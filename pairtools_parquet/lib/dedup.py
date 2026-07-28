@@ -516,6 +516,16 @@ def dedup_pairs(
         )
         keep_parent_id = True
 
+    # Deduplication reads the input twice -- once to find the duplicates, once
+    # to write the rows out with the answer applied -- and a pipe can only be
+    # read once. Refusing is the only honest option: reading a spent stream
+    # would report every pair as a duplicate of nothing and emit an empty file.
+    if str(input_path) == arrowio.STDIO_PATH:
+        raise ValueError(
+            "dedup cannot read from stdin: it needs two passes over the pairs, "
+            "so the input has to be a file it can reopen"
+        )
+
     header = arrowio.read_header(
         input_path,
         nproc_in=kwargs.get("nproc_in", 3),

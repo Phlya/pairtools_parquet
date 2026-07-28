@@ -159,6 +159,32 @@
   it to SQL, so the condition language is whatever pairtools supports.
 
 ### Fixed
+- `-` works in both directions, so the tools can be composed with pipes:
+  `select ... -o - in.pairs | sort -o - - | markasdup -o - -`. Text only —
+  Parquet's footer is written at the end of the file, so it cannot go to a
+  stream, and `-o -` always means `.pairs`.
+  Neither half worked before, and neither failed loudly. `-o -` opened a file
+  literally named `-` in the working directory and left stdout empty, exiting
+  0, so a pipeline produced an empty result and a stray file rather than an
+  error. And any tool that read the header to decide what to do before opening
+  the input for real — `sort` resolving its sort keys, `dedup` its columns —
+  reopened a pipe that had already given up its header, and stopped with "has
+  no '#columns:' header line". stdin is now read once and the stream kept
+  positioned after the header, and stdout is written directly, wrapped so that
+  pyarrow closing its sink does not close the process's stdout.
+- `dedup` refuses `-` as input rather than silently producing nothing. It reads
+  the pairs twice — once to find the duplicates, once to write them out with
+  the answer applied — which a pipe cannot serve. It used to read the spent
+  stream and write an empty file, reporting success.
+  Everything else pipes: `select`, `sort`, `markasdup`, `flip`, `sample`,
+  `merge` (including a mix of files and stdin), `restrict`, `stats`, `scaling`
+  and `filterbycov` all give the same answer from a pipe as from a file, which
+  `tests/test_stdio.py` now checks by comparing the two.
+  Worth knowing when composing: writing Parquet between steps is still faster
+  than piping text, because a pipe cannot be seeked and so gives up both column
+  projection and parallel scanning. `select | sort | dedup` over 5.6M pairs
+  takes 24.6s through Parquet files against 34.6s through text, with
+  intermediates a third the size.
 - `merge` is now a merge rather than a sort, and gives the same answer whatever
   format its inputs are in. Rows tied on all five sort keys came out in a
   different order from Parquet input than from text — and in a different order

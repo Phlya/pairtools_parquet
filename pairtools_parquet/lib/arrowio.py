@@ -17,6 +17,7 @@ happily; only our text output rejects it, loudly rather than silently.
 """
 
 import contextlib
+import io
 import subprocess
 import sys
 
@@ -37,6 +38,16 @@ DEFAULT_BLOCK_SIZE = 1 << 24
 
 PARQUET_SUFFIXES = (".parquet", ".pq")
 
+#: The path that means stdin on the way in and stdout on the way out.
+STDIO_PATH = "-"
+
+#: stdin can only be read once, so the header and the stream positioned just
+#: past it are remembered. A tool that reads the header to decide what to do --
+#: `sort` resolving its keys, `dedup` its columns -- and then opens the input
+#: for real would otherwise find the header already consumed and the columns
+#: unknowable.
+_stdin_state = None
+
 #: Extensions pairtools' auto_open treats as compressed.
 COMPRESSED_SUFFIXES = (".gz", ".bz2", ".lz4")
 
@@ -56,6 +67,9 @@ def read_header(path, nproc_in=3, cmd_in=None):
     if is_parquet(path):
         return headerio.read_header(path)
 
+    if str(path) == STDIO_PATH:
+        return list(_open_stdin(nproc_in, cmd_in)[0])
+
     instream = fileio.auto_open(path, mode="r", nproc=nproc_in, command=cmd_in)
     try:
         header, _ = headerops.get_header(instream)
@@ -63,6 +77,19 @@ def read_header(path, nproc_in=3, cmd_in=None):
         if instream is not sys.stdin:
             instream.close()
     return header
+
+
+def _open_stdin(nproc_in, cmd_in, ignore_warning=False):
+    """Read stdin's header once, and keep the stream positioned after it."""
+    global _stdin_state
+    if _stdin_state is None:
+        instream = fileio.auto_open(
+            STDIO_PATH, mode="r", nproc=nproc_in, command=cmd_in
+        )
+        _stdin_state = headerops.get_header(
+            instream, ignore_warning=ignore_warning
+        )
+    return _stdin_state
 
 
 def _binary_stream(stream):
@@ -153,6 +180,34 @@ def open_pairs(
             path, columns, block_size, nproc_in, cmd_in, column_names
         )
     return header, _reader_from_batches(batches, fallback)
+
+
+class _keep_open(io.RawIOBase):
+    """A writable view of a stream that flushes, but never closes, the original.
+
+    pyarrow closes whatever it was handed, and stdout is the caller's, not
+    ours: a tool that writes several outputs must not lose stdout when the
+    first of them finishes.
+    """
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def writable(self):
+        return True
+
+    def write(self, data):
+        return self._stream.write(data)
+
+    def flush(self):
+        if not self.closed:
+            self._stream.flush()
+
+    def close(self):
+        if not self.closed:
+            self._stream.flush()
+        # Marks this wrapper closed; the wrapped stream stays open.
+        super().close()
 
 
 def with_row_ids(reader, columns=None, counter=None, name="rid"):
@@ -249,12 +304,19 @@ def _open_parquet(path, columns, batch_size):
 
 
 def _open_text(path, columns, block_size, nproc_in, cmd_in, column_names=None):
-    instream = fileio.auto_open(path, mode="r", nproc=nproc_in, command=cmd_in)
     # A caller that supplied the column names is not relying on the file to
     # declare them, so a headerless input is not worth warning about.
-    header, instream = headerops.get_header(
-        instream, ignore_warning=column_names is not None
-    )
+    if str(path) == STDIO_PATH:
+        header, instream = _open_stdin(
+            nproc_in, cmd_in, ignore_warning=column_names is not None
+        )
+    else:
+        instream = fileio.auto_open(
+            path, mode="r", nproc=nproc_in, command=cmd_in
+        )
+        header, instream = headerops.get_header(
+            instream, ignore_warning=column_names is not None
+        )
     if column_names is None:
         column_names = headerops.extract_column_names(header)
     if not column_names:
@@ -361,26 +423,34 @@ class PairsWriter:
         # side of the package.
         from .csv_parquet_converter import choose_compressor
 
-        # Whether to compress is decided by the extension, as pairtools'
-        # auto_open does; --compress-program only picks which compressor. A
-        # plain `.pairs` output must be plain text, however that flag is set.
-        if compresses_by_extension(self.path):
-            _, command = choose_compressor(compress_program, threads=nproc_out)
+        if self.path == STDIO_PATH:
+            # `-` is a stream, so there is no extension to decide compression
+            # from and nothing to reopen -- pipe through a compressor yourself
+            # if you want one, exactly as `pairtools <tool> -o -` requires.
+            sink_file = _keep_open(sys.stdout.buffer)
         else:
-            command = []
+            # Whether to compress is decided by the extension, as pairtools'
+            # auto_open does; --compress-program only picks which compressor. A
+            # plain `.pairs` output must be plain text, however that flag is set.
+            if compresses_by_extension(self.path):
+                _, command = choose_compressor(compress_program, threads=nproc_out)
+            else:
+                command = []
 
-        output_file = self._stack.enter_context(open(self.path, "wb"))
-        if command:
-            # Registered before the process is entered, so it runs after
-            # Popen.__exit__ has closed stdin and waited: the exit code is only
-            # meaningful once the compressor has seen EOF.
-            self._stack.callback(self._check_compressor)
-            self._proc = self._stack.enter_context(
-                subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output_file)
-            )
-            sink_file = self._proc.stdin
-        else:
-            sink_file = output_file
+            output_file = self._stack.enter_context(open(self.path, "wb"))
+            if command:
+                # Registered before the process is entered, so it runs after
+                # Popen.__exit__ has closed stdin and waited: the exit code is
+                # only meaningful once the compressor has seen EOF.
+                self._stack.callback(self._check_compressor)
+                self._proc = self._stack.enter_context(
+                    subprocess.Popen(
+                        command, stdin=subprocess.PIPE, stdout=output_file
+                    )
+                )
+                sink_file = self._proc.stdin
+            else:
+                sink_file = output_file
 
         sink = pa.output_stream(sink_file)
         # Only the line terminator is stripped, not trailing whitespace:
