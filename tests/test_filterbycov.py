@@ -7,11 +7,15 @@ from conftest import read_pairs_body, read_parquet_body, run_cli, run_pairtools
 from test_dedup import make_duplicated_pairs
 
 
-@pytest.fixture
-def sorted_pairs(tmp_path):
-    """Pairs with clustered positions, so some regions exceed the coverage cap."""
-    raw = make_duplicated_pairs(tmp_path / "raw.pairs")
-    path = tmp_path / "sorted.pairs"
+@pytest.fixture(scope="session")
+def sorted_pairs(tmp_path_factory):
+    """Pairs with clustered positions, so some regions exceed the coverage cap.
+
+    Built once for the session; every test only reads it.
+    """
+    directory = tmp_path_factory.mktemp("filterbycov_input")
+    raw = make_duplicated_pairs(directory / "raw.pairs")
+    path = directory / "sorted.pairs"
     run_pairtools("sort", "-o", path, raw)
     return path
 

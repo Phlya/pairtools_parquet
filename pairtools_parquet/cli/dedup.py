@@ -58,20 +58,21 @@ from . import cli, common_io_options
 )
 @click.option(
     "--backend",
-    type=click.Choice(["scipy", "sklearn"]),
-    default="scipy",
+    type=click.Choice(["duckdb", "scipy", "sklearn"]),
+    default="duckdb",
     show_default=True,
-    help="What backend to use: scipy and sklearn are based on KD-trees. "
-    "pairtools' cython backend is not available here, as it works "
-    "line-by-line on text streams. [dedup option]",
+    help="What backend to use. duckdb finds duplicate candidates with a "
+    "blocked equi-join and is several times faster; scipy and sklearn are "
+    "pairtools' KD-tree implementations, kept as the reference duckdb is "
+    "tested against. pairtools' cython backend is not available here, as it "
+    "works line-by-line on text streams. [dedup option]",
 )
 @click.option(
     "--chunksize",
     type=int,
-    default=10_000,
-    show_default=True,
+    default=None,
     help="Number of pairs in each chunk. Reduce for lower memory footprint. "
-    "[dedup option]",
+    "[default: 20000000 with --backend duckdb, 10000 otherwise] [dedup option]",
 )
 @click.option(
     "--carryover",
@@ -85,9 +86,9 @@ from . import cli, common_io_options
     "-p",
     "--n-proc",
     type=int,
-    default=1,
+    default=4,
     show_default=True,
-    help="Number of cores to use. Only applies with sklearn backend. "
+    help="Number of cores to use. Applies to the duckdb and sklearn backends. "
     "[dedup option]",
 )
 @click.option(

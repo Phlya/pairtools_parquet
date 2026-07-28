@@ -60,10 +60,16 @@ def make_duplicated_pairs(path, n_unique=800, seed=7):
     return write_pairs(path, HEADER, rows)
 
 
-@pytest.fixture
-def sorted_duplicated_pairs(tmp_path):
-    raw = make_duplicated_pairs(tmp_path / "raw.pairs")
-    path = tmp_path / "sorted.pairs"
+@pytest.fixture(scope="session")
+def sorted_duplicated_pairs(tmp_path_factory):
+    """Built once for the session: every test only reads it.
+
+    Sorting it per test meant a `pairtools sort` subprocess for each of the
+    thirty-odd tests here, which dominated the suite's runtime.
+    """
+    directory = tmp_path_factory.mktemp("dedup_input")
+    raw = make_duplicated_pairs(directory / "raw.pairs")
+    path = directory / "sorted.pairs"
     run_pairtools("sort", "-o", path, raw)
     return path
 
@@ -217,3 +223,163 @@ def test_cython_backend_reports_clearly(tmp_path, sorted_duplicated_pairs):
             "dedup", "-o", tmp_path / "o.pairs", "--backend", "cython",
             sorted_duplicated_pairs
         )
+
+
+# --------------------------------------------------------------------------
+# The duckdb backend, against the pandas one it replaces
+# --------------------------------------------------------------------------
+
+BACKEND_OPTIONS = [
+    [],
+    ["--max-mismatch", "0"],
+    ["--max-mismatch", "10"],
+    ["--method", "sum"],
+    ["--method", "sum", "--max-mismatch", "8"],
+    ["--no-mark-dups"],
+    ["--keep-parent-id"],
+]
+
+
+@pytest.mark.parametrize(
+    "options", BACKEND_OPTIONS, ids=lambda o: " ".join(o) or "defaults"
+)
+def test_duckdb_backend_matches_scipy(tmp_path, sorted_duplicated_pairs, options):
+    """The fast path has to agree with the implementation it replaces."""
+    out = {}
+    for backend in ("scipy", "duckdb"):
+        out[backend] = {
+            part: tmp_path / "{}_{}.pairs".format(backend, part)
+            for part in ("nodups", "dups", "unmapped")
+        }
+        run_cli(
+            "dedup", "--backend", backend,
+            "-o", out[backend]["nodups"],
+            "--output-dups", out[backend]["dups"],
+            "--output-unmapped", out[backend]["unmapped"],
+            *options, sorted_duplicated_pairs
+        )
+
+    for part in out["scipy"]:
+        assert read_pairs_body(out["scipy"][part]) == read_pairs_body(
+            out["duckdb"][part]
+        ), part
+    assert len(read_pairs_body(out["duckdb"]["dups"])) > 0
+
+
+# Small windows mean one query per window, so these stay modest; the
+# single-row windows are exercised on the tiny fixtures below instead.
+@pytest.mark.parametrize("chunksize", [11, 101, 100000])
+def test_duckdb_windows_do_not_change_the_answer(
+    tmp_path, sorted_duplicated_pairs, chunksize
+):
+    """--chunksize is a memory knob for this backend, not a semantic one.
+
+    Each window is deduplicated with a lookback of --carryover rows, and a
+    cluster whose smallest row falls in the lookback inherits that row's own
+    keeper -- so a family split across a window boundary still resolves to one
+    keeper however small the window is.
+    """
+    whole = tmp_path / "whole.pairs"
+    windowed = tmp_path / "windowed.pairs"
+
+    run_cli("dedup", "-o", whole, sorted_duplicated_pairs)
+    run_cli(
+        "dedup", "-o", windowed, "--chunksize", str(chunksize),
+        sorted_duplicated_pairs
+    )
+
+    assert read_pairs_body(whole) == read_pairs_body(windowed)
+
+
+def test_duckdb_backend_rejects_mismatched_extra_col_pair(
+    tmp_path, sorted_duplicated_pairs
+):
+    """An extra column pair naming two different columns is not a join key."""
+    with pytest.raises(AssertionError, match="backend scipy"):
+        run_cli(
+            "dedup", "-o", tmp_path / "o.pairs",
+            "--extra-col-pair", "strand1", "strand2",
+            sorted_duplicated_pairs
+        )
+
+
+def test_duckdb_backend_keeps_chains_across_a_window_boundary(tmp_path):
+    """A chain of near-duplicates must resolve to one keeper, boundary or not.
+
+    `pairtools dedup` loses this case: its carryover holds only the previous
+    chunk's *non*-duplicates, so a chain that reaches the boundary through a
+    duplicate is cut and the next read is kept as unique. See UPSTREAM.md.
+    """
+    header = (
+        ["## pairs format v1.0.0", "#shape: upper triangle", "#chromsize: chr1 10000"]
+        + ["#columns: readID chrom1 pos1 chrom2 pos2 strand1 strand2 pair_type"]
+    )
+    # each row is 3bp from the previous one and 6bp from the one before that,
+    # so they are one cluster only by chaining
+    rows = [
+        ("r{}".format(i), "chr1", 1000 + 3 * i, "chr1", 5000, "+", "+", "UU")
+        for i in range(4)
+    ]
+    path = write_pairs(tmp_path / "chain.pairs", header, rows)
+
+    for chunksize in (1, 2, 3, 4, 100):
+        out = tmp_path / "out_{}.pairs".format(chunksize)
+        run_cli("dedup", "-o", out, "--chunksize", str(chunksize), path)
+        body = read_pairs_body(out)
+        assert len(body) == 1, "chunksize {} split the chain".format(chunksize)
+        assert body[0].split("\t")[0] == "r0"
+
+
+def test_duckdb_window_joins_two_families_through_a_boundary(tmp_path):
+    """A window can be the first to see that two earlier families are one.
+
+    Rows 0 and 1 start separate; row 2 (in the next window) is within reach of
+    both, so all three are one family and only row 0 survives. Resolving the
+    component to the keeper of its own smallest member -- row 1 here -- would
+    keep row 0 *and* row 1, because row 1's family reaches back to row 0 only
+    through the row that joined them.
+    """
+    header = (
+        ["## pairs format v1.0.0", "#shape: upper triangle", "#chromsize: chr1 10000"]
+        + ["#columns: readID chrom1 pos1 chrom2 pos2 strand1 strand2 pair_type"]
+    )
+    # pos2 apart by 4 (> --max-mismatch 3) for r0/r1, but r2 sits between them
+    rows = [
+        ("r0", "chr1", 1000, "chr1", 5000, "+", "+", "UU"),
+        ("r1", "chr1", 1000, "chr1", 5004, "+", "+", "UU"),
+        ("r2", "chr1", 1000, "chr1", 5002, "+", "+", "UU"),
+    ]
+    path = write_pairs(tmp_path / "join.pairs", header, rows)
+
+    for chunksize in (1, 2, 3, 100):
+        out = tmp_path / "out_{}.pairs".format(chunksize)
+        run_cli("dedup", "-o", out, "--chunksize", str(chunksize), path)
+        body = read_pairs_body(out)
+        assert [l.split("\t")[0] for l in body] == ["r0"], (
+            "chunksize {} kept {}".format(chunksize, [l.split("\t")[0] for l in body])
+        )
+
+
+@pytest.mark.parametrize("chunksize", [11, 100000])
+def test_duckdb_parent_ids_do_not_depend_on_the_window(
+    tmp_path, sorted_duplicated_pairs, chunksize
+):
+    """A keeper can move earlier as a window revises its lookback.
+
+    The recorded parent has to end up the same as a single-window run, or
+    --keep-parent-id would name a different member of the family depending on
+    a memory setting.
+    """
+    whole = tmp_path / "whole.dups"
+    windowed = tmp_path / "windowed.dups"
+
+    run_cli(
+        "dedup", "-o", tmp_path / "w.pairs", "--output-dups", whole,
+        "--keep-parent-id", sorted_duplicated_pairs
+    )
+    run_cli(
+        "dedup", "-o", tmp_path / "n.pairs", "--output-dups", windowed,
+        "--keep-parent-id", "--chunksize", str(chunksize), sorted_duplicated_pairs
+    )
+
+    assert read_pairs_body(whole) == read_pairs_body(windowed)

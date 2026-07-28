@@ -8,16 +8,25 @@ with a handful of helpers (``csv_match``, ``wildcard_match``, ``regex_match``,
 approximation -- the one this replaces silently mishandled ``not``, chained
 comparisons, ``--startup-code`` and anything else it had no regex for.
 
-Evaluation is row-wise, as it is in pairtools. What this saves over
-``pairtools select`` is the text parsing and re-serialization on either side,
-not the evaluation itself; vectorizing the common comparison-only conditions is
-left to the point where the other tools get vectorized, so that it can be
-checked against this implementation.
+``evaluate_df`` evaluates the condition once per row, through
+``DataFrame.iterrows``, which costs about 36us a row -- 200s for 5.6M pairs,
+where `pairtools select` itself takes 9s. So a condition is first rewritten to
+run over whole columns at once: `and`/`or`/`not` and chained comparisons become
+their array equivalents on the parse tree, and the helper functions get
+column-wise versions that evaluate the predicate once per *distinct* value,
+since a chromosome column has a handful of them and millions of rows.
+
+Anything the rewrite cannot express falls back to ``evaluate_df``, which
+remains the definition of what a condition means. The fast path never guesses:
+it returns nothing unless it produced a boolean array of the right length, and
+`tests/test_select.py` checks the two agree condition by condition.
 """
 
+import ast
 import warnings
 
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 import pairtools.lib.select as pairtools_select
 from pairtools.lib import headerops, pairsam_format
@@ -97,14 +106,179 @@ def header_update(header, util_name=UTIL_NAME, remove_columns="", chrom_subset=N
     return new_header
 
 
-def evaluate_batch(batch, condition, type_cast=(), startup_code=None):
-    """Return a boolean mask of the rows of `batch` satisfying `condition`."""
-    df = batch.to_pandas()
-    # engine="python" is the one that matches `pairtools select`: its pandas
+_BOOL_OPS = {ast.And: ast.BitAnd, ast.Or: ast.BitOr}
+
+
+class _ArrayRewriter(ast.NodeTransformer):
+    """Rewrite a CONDITION so it evaluates over whole columns at once.
+
+    Python's `and`, `or` and `not` force their operands to a truth value, which
+    an array does not have, and a chained comparison is `and` underneath. The
+    array equivalents are `&`, `|` and `~`.
+
+    The rewrite is done on the parse tree rather than on the text because `&`
+    binds tighter than a comparison does: `a == 1 & b == 2` parses as
+    `a == (1 & b) == 2`, so substituting the characters would silently change
+    what the condition means.
+    """
+
+    def visit_BoolOp(self, node):
+        self.generic_visit(node)
+        operator = _BOOL_OPS[type(node.op)]()
+        folded = node.values[0]
+        for value in node.values[1:]:
+            folded = ast.BinOp(left=folded, op=operator, right=value)
+        return ast.copy_location(folded, node)
+
+    def visit_UnaryOp(self, node):
+        self.generic_visit(node)
+        if isinstance(node.op, ast.Not):
+            return ast.copy_location(
+                ast.UnaryOp(op=ast.Invert(), operand=node.operand), node
+            )
+        return node
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if len(node.ops) == 1 and not isinstance(node.ops[0], (ast.In, ast.NotIn)):
+            return node
+
+        operands = [node.left] + node.comparators
+        parts = []
+        for i, op in enumerate(node.ops):
+            left, right = operands[i], operands[i + 1]
+            if isinstance(op, (ast.In, ast.NotIn)):
+                # `x in [...]` is a membership test per element
+                part = ast.Call(
+                    func=ast.Name(id="_isin", ctx=ast.Load()),
+                    args=[left, right],
+                    keywords=[],
+                )
+                if isinstance(op, ast.NotIn):
+                    part = ast.UnaryOp(op=ast.Invert(), operand=part)
+            else:
+                part = ast.Compare(left=left, ops=[op], comparators=[right])
+            parts.append(part)
+
+        folded = parts[0]
+        for part in parts[1:]:
+            folded = ast.BinOp(left=folded, op=ast.BitAnd(), right=part)
+        return ast.copy_location(ast.fix_missing_locations(folded), node)
+
+
+def _by_distinct_value(values, predicate):
+    """Apply a scalar `predicate` once per distinct value of a column.
+
+    A chromosome column has a handful of distinct values and millions of rows,
+    so the wildcard and regex helpers cost a few calls rather than a few
+    million.
+    """
+    codes, uniques = pd.factorize(values)
+    answers = np.array([bool(predicate(value)) for value in uniques], dtype=bool)
+    return answers[codes]
+
+
+def _vectorized_helpers():
+    """Column-wise versions of the helpers a CONDITION can call.
+
+    Each falls back to pairtools' own scalar implementation when handed a
+    scalar, so a condition mixing the two still means the same thing.
+    """
+
+    def lift(scalar_version):
+        def helper(x, pattern):
+            if not isinstance(x, np.ndarray):
+                return scalar_version(x, pattern)
+            return _by_distinct_value(x, lambda value: scalar_version(value, pattern))
+
+        return helper
+
+    def region_match(chrom, pos, region_chrom, region_start=-1, region_end=-1):
+        if not isinstance(chrom, np.ndarray):
+            return pairtools_select.region_match(
+                chrom, pos, region_chrom, region_start, region_end
+            )
+        within = chrom == region_chrom
+        within &= pos >= region_start
+        if region_end != -1:
+            within &= pos <= region_end
+        return within
+
+    return {
+        "csv_match": lambda x, csv: (
+            np.isin(x, csv.split(","))
+            if isinstance(x, np.ndarray)
+            else pairtools_select.csv_match(x, csv)
+        ),
+        "wildcard_match": lift(pairtools_select.wildcard_match),
+        "regex_match": lift(pairtools_select.regex_match),
+        "region_match": region_match,
+        "_isin": lambda x, values: np.isin(x, list(values)),
+    }
+
+
+def compile_vectorized(condition):
+    """Compile `condition` for whole-column evaluation, or None if unparseable."""
+    try:
+        tree = ast.parse(condition.strip(), mode="eval")
+    except SyntaxError:
+        return None
+    tree = ast.fix_missing_locations(_ArrayRewriter().visit(tree))
+    try:
+        return compile(tree, "<condition>", "eval")
+    except (SyntaxError, ValueError):
+        return None
+
+
+def evaluate_vectorized(columns, code, n_rows):
+    """Evaluate a compiled condition over whole columns, or None if it cannot be.
+
+    Returns None rather than raising for anything the rewrite does not cover --
+    a helper that only works on one value at a time, an expression that
+    collapses to a scalar -- so the caller can fall back to pairtools' row-wise
+    evaluation and get the same answer, only slower.
+    """
+    namespace = dict(vars(pairtools_select))
+    namespace.update(_vectorized_helpers())
+    namespace.update(columns)
+    try:
+        result = eval(code, namespace)
+    except Exception:
+        return None
+
+    if not isinstance(result, np.ndarray) or result.shape != (n_rows,):
+        return None
+    if result.dtype != bool:
+        return None
+    return result
+
+
+def evaluate_batch(batch, condition, type_cast=(), startup_code=None, code=None):
+    """Return a boolean mask of the rows of `batch` satisfying `condition`.
+
+    Tries whole-column evaluation first and falls back to pairtools'
+    ``evaluate_df``, which evaluates the condition once per row. The fallback
+    is the definition of what the condition means; the fast path has to agree
+    with it, which `tests/test_select.py` checks condition by condition.
+    """
+    if startup_code is not None:
+        exec(startup_code, vars(pairtools_select))
+
+    if code is not None:
+        columns = {
+            name: batch.column(name).to_numpy(zero_copy_only=False)
+            for name in batch.schema.names
+        }
+        mask = evaluate_vectorized(columns, code, batch.num_rows)
+        if mask is not None:
+            return mask
+
+    # engine="python" is the one that matches `pairtools select`: the pandas
     # engine goes through DataFrame.eval, which cannot call the helper
-    # functions and rejects `and`/`or`, so almost every real condition would
-    # fail or, worse, mean something different.
-    mask = evaluate_df(df, condition, type_cast, startup_code, engine="python")
+    # functions and rejects `and`/`or`.
+    mask = evaluate_df(
+        batch.to_pandas(), condition, type_cast, startup_code, engine="python"
+    )
     return np.asarray(mask, dtype=bool)
 
 
@@ -158,6 +332,10 @@ def select_pairs(
         nproc_out=kwargs.get("nproc_out", 8),
     )
     selected_schema = pa.schema([reader.schema.field(c) for c in keep_columns])
+    # --type-cast changes what a column *is* for the evaluation, and NumPy
+    # compares mismatched types elementwise-false rather than raising, so the
+    # fast path could differ without ever failing. Rare enough to just skip.
+    code = None if type_cast else compile_vectorized(condition)
 
     with PairsWriter(
         output, new_header, schema=selected_schema, **writer_kwargs
@@ -170,7 +348,7 @@ def select_pairs(
         )
         try:
             for batch in reader:
-                mask = evaluate_batch(batch, condition, type_cast, startup_code)
+                mask = evaluate_batch(batch, condition, type_cast, startup_code, code)
                 if chroms is not None:
                     mask &= np.isin(batch.column("chrom1").to_numpy(zero_copy_only=False), list(chroms))
                     mask &= np.isin(batch.column("chrom2").to_numpy(zero_copy_only=False), list(chroms))

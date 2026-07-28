@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import pytest
 from pairtools.lib import pairsam_format
 
 from conftest import read_parquet_body, read_parquet_header, run_cli
@@ -213,3 +214,98 @@ def test_region_match_no_end(tmp_path, mock_parquet_path):
     # the open-ended region has no upper bound, so it selects exactly the rows
     # on chr1 at or past the start
     assert sorted(output_body) == sorted(expected)
+
+
+# --------------------------------------------------------------------------
+# Whole-column evaluation, against the row-wise evaluation it shortcuts
+# --------------------------------------------------------------------------
+
+VECTORIZABLE = [
+    'chrom1=="chr1"',
+    "chrom1==chrom2",
+    "pos1>1000",
+    "not (chrom1==chrom2)",
+    "(chrom1==chrom2) and (pos1<pos2)",
+    "(chrom1==chrom2) or (pair_type=='UU')",
+    "chrom1==chrom2 and pos1 < pos2 and pair_type == 'UU'",
+    "1000 < pos1 < 100000",
+    'chrom1 in ["chr1","chr2"]',
+    'chrom1 not in ["chr1"]',
+    "abs(pos1-pos2) < 1000",
+    'wildcard_match(chrom1, "chr1*")',
+    'regex_match(chrom1, "chr[12]")',
+    'csv_match(chrom1, "chr1,chr2")',
+    'region_match(chrom1, pos1, "chr1", 0, 100000)',
+    '(pair_type=="UU") and wildcard_match(chrom1, "chr*")',
+]
+
+#: Conditions the rewrite cannot handle, which must fall back rather than lie.
+NOT_VECTORIZABLE = [
+    "len(chrom1) > 4",
+    "chrom1.startswith('chr')",
+]
+
+
+def one_batch(path):
+    from pairtools_parquet.lib.arrowio import open_pairs
+
+    _, reader = open_pairs(str(path))
+    return next(iter(reader))
+
+
+@pytest.mark.parametrize("condition", VECTORIZABLE + NOT_VECTORIZABLE)
+def test_vectorized_matches_row_wise(mock_parquet_path, condition):
+    """The fast path must agree with pairtools' row-by-row evaluation."""
+    from pairtools_parquet.lib.select import compile_vectorized, evaluate_batch
+
+    batch = one_batch(mock_parquet_path)
+    fast = evaluate_batch(batch, condition, code=compile_vectorized(condition))
+    slow = evaluate_batch(batch, condition, code=None)
+
+    assert list(fast) == list(slow), condition
+
+
+@pytest.mark.parametrize("condition", VECTORIZABLE)
+def test_vectorizable_conditions_really_are(mock_parquet_path, condition):
+    """Otherwise the agreement test above proves nothing."""
+    from pairtools_parquet.lib.select import compile_vectorized, evaluate_vectorized
+
+    batch = one_batch(mock_parquet_path)
+    columns = {
+        name: batch.column(name).to_numpy(zero_copy_only=False)
+        for name in batch.schema.names
+    }
+    mask = evaluate_vectorized(
+        columns, compile_vectorized(condition), batch.num_rows
+    )
+    assert mask is not None, "{!r} fell back to row-wise evaluation".format(condition)
+
+
+@pytest.mark.parametrize("condition", NOT_VECTORIZABLE)
+def test_unvectorizable_conditions_fall_back(mock_parquet_path, condition):
+    """A condition the rewrite cannot express must return None, not a wrong mask."""
+    from pairtools_parquet.lib.select import compile_vectorized, evaluate_vectorized
+
+    batch = one_batch(mock_parquet_path)
+    columns = {
+        name: batch.column(name).to_numpy(zero_copy_only=False)
+        for name in batch.schema.names
+    }
+    assert (
+        evaluate_vectorized(columns, compile_vectorized(condition), batch.num_rows)
+        is None
+    )
+
+
+def test_bitwise_precedence_is_not_broken_by_the_rewrite():
+    """`&` binds tighter than `==`, so the rewrite must be on the parse tree.
+
+    Rewriting the text would turn `a == 1 and b == 2` into `a == 1 & b == 2`,
+    which Python parses as `a == (1 & b) == 2`.
+    """
+    import numpy as np
+    from pairtools_parquet.lib.select import compile_vectorized, evaluate_vectorized
+
+    columns = {"a": np.array([1, 1, 2, 2]), "b": np.array([2, 3, 2, 3])}
+    mask = evaluate_vectorized(columns, compile_vectorized("a == 1 and b == 2"), 4)
+    assert list(mask) == [True, False, False, False]

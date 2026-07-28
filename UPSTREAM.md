@@ -107,6 +107,43 @@ parity. `tests/test_restrict.py` pins both our behaviour and, via
 `test_pairtools_restrict_crashes_on_missing_chromosome`, that upstream still
 crashes, so we learn when it is fixed.
 
+### `dedup`'s carryover cuts duplicate chains at every chunk boundary
+
+`_dedup_stream` carries the tail of each chunk into the next so a duplicate
+family straddling the boundary is still found — but it carries only the
+**non**-duplicates:
+
+```python
+df_nodups = df_marked.loc[~mask_duplicated, colnames]
+df_prev_nodups = df_nodups.tail(carryover).reset_index(drop=True)
+```
+
+Duplicates are found by connected components, so a family can be a *chain*: A
+and B within `r`, B and C within `r`, A and C not. If the chunk boundary falls
+between B and C, B is a duplicate and so is dropped from the carryover — C
+never sees it, is not within `r` of A, and is kept as a unique read.
+
+Four pairs 3bp apart with `--max-mismatch 3`, which are one family:
+
+```
+              chunksize 1  2  3  4  100
+pairtools keeps          2  2  2  1    1
+```
+
+It is rare with the defaults (0 rows in 4M with `--method max --max-mismatch
+3`) but grows with the radius: `--method sum --max-mismatch 5` on the same 4M
+pairs leaves 2 reads that should have been dropped, both at row indices that
+are exact multiples of the 10000-row chunk size. Carrying over the last
+`carryover` rows regardless of duplicate status, and keeping their resolved
+parents, would fix it.
+
+**We deliberately diverge here**: the `duckdb` backend's lookback keeps every
+row and substitutes each lookback row's already-final keeper, so a chain
+resolves to one read at any window size. `tests/test_dedup.py` pins that our
+answer does not depend on `--chunksize` and that the chain above collapses to a
+single read. The `scipy`/`sklearn` backends still call upstream's
+`_dedup_chunk` through upstream's carryover rule, and so still reproduce it.
+
 ### `stats --merge` output ordering is not reproducible
 
 `pairtools stats --merge` writes its keys in an order that varies between

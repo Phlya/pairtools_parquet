@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 ### Added
+- `dedup --backend duckdb`, now the default, is **6.4x faster than `pairtools
+  dedup`** (62.2s -> 9.7s on 5.6M pairs, 4 threads) and produces byte-identical
+  output. `--max-mismatch` is 3bp by default and dedup input is sorted, so
+  finding duplicates is not a nearest-neighbour search over a plane but a
+  lookup in a 3bp window: bucketing on
+  `(chrom1, chrom2, strand1, strand2, pos1 // r)` turns it into an equi-join
+  whose buckets hold exactly the duplicate families. Profiling the old path
+  showed its KD-trees were only 12% of the runtime and pandas bookkeeping the
+  rest, so this replaces both. `scipy` and `sklearn` still work and are the
+  reference the new backend is tested against.
+  With this backend `--chunksize` is a memory knob rather than a semantic one:
+  its lookback resolves clusters across a window boundary, so the answer does
+  not depend on it. The default rises to 20,000,000 rows accordingly, and
+  `-p/--n-proc` now sets DuckDB's thread count (default 4).
 - `parse` and `parse2`, ported from their pairtools counterparts. The parser is
   pairtools' own `streaming_classify`, called unchanged; only its output is
   redirected, from formatted text lines into Arrow batches. `parse -o x.parquet`
@@ -87,6 +101,21 @@
   columns are named per side (`mapq1`, `mapq2`), so the lookup missed and every
   one of them was typed as a string — which made `select 'mapq1>=30'` fail
   comparing a str to an int, where `pairtools select` works.
+- `select` is no longer 22x **slower** than `pairtools select` (201s -> 3.9s on
+  5.6M pairs, against pairtools' 8.5s). `evaluate_df`, which 1.0.0 adopted for
+  its exact condition semantics, evaluates the condition once per row through
+  `DataFrame.iterrows`. Conditions are now rewritten to run over whole columns:
+  `and`/`or`/`not` and chained comparisons become their array equivalents on
+  the parse tree — not on the text, where `&` binding tighter than `==` would
+  change the meaning — and `csv_match`/`wildcard_match`/`regex_match`/
+  `region_match` get column-wise versions that evaluate once per distinct
+  value. Anything the rewrite cannot express still goes to `evaluate_df`, which
+  stays the definition of what a condition means.
+- `dedup` no longer loses duplicates at chunk boundaries. `pairtools dedup`
+  carries only the previous chunk's *non*-duplicates into the next, so a chain
+  of near-duplicates that crosses the boundary through a duplicate is cut and
+  the next read is kept as unique. Applies to `--backend duckdb`; the pandas
+  backends call upstream's code and still reproduce it. See UPSTREAM.md.
 - Header lines no longer lose their trailing whitespace when written as text.
   `pairtools header generate` with no `--assembly` emits `#genome_assembly: `
   with a trailing space, and `headerops.get_header` keeps it, so stripping it
