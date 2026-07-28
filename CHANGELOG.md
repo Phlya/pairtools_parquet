@@ -181,9 +181,21 @@
   parallel, so `row_number() OVER ()` counts in arrival order, not file order —
   the same trap `dedup` documents. Text inputs are therefore read through a
   sequential Arrow reader, which costs them DuckDB's parallel CSV parsing:
-  merging two 5.6M-row text files went from 6.3s to 10.6s, against
-  `pairtools merge`'s 6.0s. Parquet in and Parquet out, the path this package
-  exists for, stays at 3.6s. A wrong answer is not worth 4s.
+  merging two 5.6M-row text files takes about 7.3s against `pairtools merge`'s
+  5.9s, best of four runs each. Parquet in and Parquet out, the path this
+  package exists for, is unaffected at 3.3s.
+  Two cheaper-looking alternatives were measured and rejected, so they need not
+  be tried again. Reading the CSV with `parallel=false` and numbering rows with
+  `row_number() OVER ()` keeps upstream's semantics and looked much faster in
+  isolation, but end to end it was slower than the Arrow reader on every path.
+  Dropping the row numbers entirely and tie-breaking on every remaining column
+  is deterministic by construction -- rows still tied are byte-identical, so
+  their order cannot be observed -- and is the fastest option for text input,
+  but it is slower for Parquet, more so for `.pairsam` where the SAM blobs
+  bloat the sort payload, and it abandons byte-identity with `pairtools merge`.
+  Nothing in the .pairs specification or pairtools' documentation constrains the
+  order of tied rows, so that last point is a choice rather than a requirement;
+  it can be revisited if text input ever matters more than parity.
   The row-numbering helper is now `arrowio.with_row_ids`, shared with `dedup`
   rather than duplicated.
   Found by `benchmarks/run.py`, which compares outputs as well as timing them

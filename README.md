@@ -120,7 +120,7 @@ number, as it is when you run the command yourself.
 | `markasdup` | 13.5s | **5.1s** | 2.7x | identical |
 | `scaling` | 19.8s | **9.0s** | 2.2x | identical |
 | `select` | 10.2s | **6.4s** | 1.6x | identical |
-| `merge` | 6.0s | **3.6s** | 1.7x | identical ¶ |
+| `merge` | 5.9s | **3.3s** | 1.8x | identical ¶ |
 | `flip` | 9.6s | **6.3s** | 1.5x | identical |
 | `parse` | 97.0s | **104.7s** | 0.9x | identical |
 | `sample` | 2.3s | **3.2s** | 0.7x | identical |
@@ -139,12 +139,13 @@ row and re-decides them, so the chain survives. It scales with density — 1 row
 per million pairs at 1M, 16 at 5.6M. `--backend scipy` reproduces pairtools
 exactly. See UPSTREAM.md.
 
-¶ `merge` is the one tool whose *text* input is slower than pairtools (10.6s
-against 6.0s). Rows tied on all five sort keys — every unmapped pair shares
-`! 0 ! 0` — need an explicit tie-break to come out in upstream's order, since
-DuckDB's sort is not stable, and the row numbers that tie-break needs are free
-in Parquet but not in DuckDB's parallel CSV scanner. Text inputs are read
-through a sequential Arrow reader to get them. Parquet is unaffected.
+¶ `merge` is the one tool whose *text* input is slower than pairtools —
+about 7.3s against 5.9s, best of four runs each. Rows tied on all five sort
+keys — every unmapped pair shares `! 0 ! 0` — need an explicit tie-break to
+come out in upstream's order, since DuckDB's sort is not stable, and the row
+numbers that tie-break needs are free in Parquet but not in DuckDB's parallel
+CSV scanner. Text inputs are read through a sequential Arrow reader to get
+them. Parquet is unaffected.
 
 `sample` and `parse` are the two that are not faster, both structurally.
 Reproducing `pairtools sample`'s `--seed` means keeping its one-draw-per-row
