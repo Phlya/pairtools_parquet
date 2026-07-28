@@ -69,6 +69,8 @@ $ pip install -e .
 
 - `sample`: take a seeded random subset of pairs.
 
+- `filterbycov`: remove pairs from regions of unusually high coverage.
+
 - `restrict`: assign pairs to restriction fragments.
 
 - `stats`: summary statistics, and merging of stats files.

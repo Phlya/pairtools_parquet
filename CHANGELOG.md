@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 ### Added
+- `filterbycov`, ported from `pairtools filterbycov`. The coverage calculation
+  is pairtools' own `_filterbycov`, called unchanged.
 - `restrict`, ported from `pairtools restrict`. About 2.8x faster than
   upstream on a genome-scale fragment file (8.1s -> 2.9s for 540k pairs),
   mostly by not loading the fragment BED with `np.genfromtxt`.

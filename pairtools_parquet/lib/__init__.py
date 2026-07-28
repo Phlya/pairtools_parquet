@@ -8,6 +8,7 @@ from . import (
     duckdbio,
     csv_parquet_converter,
     dedup,
+    filterbycov,
     flip,
     markasdup,
     restrict,
