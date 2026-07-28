@@ -267,6 +267,119 @@ def test_select_matching_nothing_still_feeds_sort(tmp_path, mock_pairs_path):
     assert read_parquet_body(sorted_empty) == []
 
 
+def split_into_sorted_inputs(tmp_path, mock_pairs_path):
+    """Split the mock file into two separately-sorted .pairs files."""
+    header = read_pairs_header(mock_pairs_path)
+    body = read_pairs_body(mock_pairs_path)
+    halves = []
+    for i, rows in enumerate((body[: len(body) // 2], body[len(body) // 2 :])):
+        raw = tmp_path / "part{}.pairs".format(i)
+        with open(raw, "w") as f:
+            f.write("".join(l + "\n" for l in header + rows))
+        part = tmp_path / "part{}.sorted.pairs".format(i)
+        run_pairtools("sort", "-o", part, raw)
+        halves.append(part)
+    return halves
+
+
+def test_merge_matches_pairtools(tmp_path, mock_pairs_path):
+    parts = split_into_sorted_inputs(tmp_path, mock_pairs_path)
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.pairs"
+
+    run_pairtools("merge", "-o", reference, *parts)
+    run_cli("merge", "-o", ours, *parts)
+
+    assert read_pairs_body(reference) == read_pairs_body(ours)
+
+
+def test_merge_header_matches_pairtools(tmp_path, mock_pairs_path):
+    """Merging must not re-mark the header as sorted.
+
+    `headerops.mark_header_as_sorted` rewrites `#chromosomes: a b c` as
+    `#chromosomes: : a b c`; `pairtools merge` never calls it, so neither may
+    we, or merged headers drift from upstream's.
+    """
+    parts = split_into_sorted_inputs(tmp_path, mock_pairs_path)
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.pairs"
+
+    run_pairtools("merge", "-o", reference, *parts)
+    run_cli("merge", "-o", ours, *parts)
+
+    def normalize(header):
+        # the @PG records differ by tool name and command line
+        return [l for l in header if not l.startswith("#samheader: @PG")]
+
+    assert normalize(read_pairs_header(reference)) == normalize(
+        read_pairs_header(ours)
+    )
+    assert "#chromosomes: : chr1 chr2 chr3" not in read_pairs_header(ours)
+
+
+def test_merge_concatenate_matches_pairtools(tmp_path, mock_pairs_path):
+    parts = split_into_sorted_inputs(tmp_path, mock_pairs_path)
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.pairs"
+
+    run_pairtools("merge", "--concatenate", "-o", reference, *parts)
+    run_cli("merge", "--concatenate", "-o", ours, *parts)
+
+    assert read_pairs_body(reference) == read_pairs_body(ours)
+
+
+def test_merge_mixed_input_formats(tmp_path, mock_pairs_path):
+    """Inputs may be a mix of .pairs and .parquet."""
+    parts = split_into_sorted_inputs(tmp_path, mock_pairs_path)
+    as_parquet = tmp_path / "part0.parquet"
+    run_cli("csv-to-parquet", "-o", as_parquet, parts[0])
+
+    reference = tmp_path / "ref.pairs"
+    ours = tmp_path / "ours.parquet"
+    run_pairtools("merge", "-o", reference, *parts)
+    run_cli("merge", "-o", ours, as_parquet, parts[1])
+
+    assert read_pairs_body(reference) == read_parquet_body(ours)
+
+
+def test_merge_single_input_leaves_header_alone(tmp_path, mock_pairs_path):
+    """As in pairtools, a lone input is passed through without a new @PG."""
+    parts = split_into_sorted_inputs(tmp_path, mock_pairs_path)
+    ours = tmp_path / "ours.pairs"
+    run_cli("merge", "-o", ours, parts[0])
+
+    assert read_pairs_header(ours) == read_pairs_header(parts[0])
+    assert read_pairs_body(ours) == read_pairs_body(parts[0])
+
+
+@pytest.mark.parametrize(
+    "command", [("sort",), ("merge",), ("parquet-to-csv",), ("csv-to-parquet",)]
+)
+def test_text_output_is_compressed_only_when_the_extension_says_so(
+    tmp_path, mock_pairs_path, command
+):
+    """`-o out.pairs` must be text, whatever --compress-program defaults to.
+
+    Compression follows the extension, as pairtools' auto_open does; the flag
+    only chooses which compressor.
+    """
+    source = mock_pairs_path
+    if command[0] == "parquet-to-csv":
+        source = tmp_path / "in.parquet"
+        run_cli("csv-to-parquet", "-o", source, mock_pairs_path)
+
+    plain = tmp_path / "out.pairs"
+    run_cli(*command, "-o", plain, source)
+    with open(plain, "rb") as f:
+        assert f.read(2) != b"\x1f\x8b", "plain .pairs output was gzip-compressed"
+    assert read_pairs_header(plain)[0] == "## pairs format v1.0.0"
+
+    compressed = tmp_path / "out.pairs.gz"
+    run_cli(*command, "-o", compressed, source)
+    with open(compressed, "rb") as f:
+        assert f.read(2) == b"\x1f\x8b", ".gz output was not compressed"
+
+
 @pytest.mark.parametrize("compress_program", ["none", "gzip"])
 def test_sort_to_compressed_output(tmp_path, mock_pairs_path, compress_program):
     suffix = ".pairs" if compress_program == "none" else ".pairs.gz"

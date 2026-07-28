@@ -7,7 +7,7 @@ import click
 
 from pairtools.lib import fileio, pairsam_format, headerops
 
-from ..lib import  duckdb_utils, json_transform, csv_parquet_converter
+from ..lib.sort import convert_pairs
 from . import cli, common_io_options
 
 
@@ -88,9 +88,17 @@ def csv_to_parquet_py(input_path,
     compress_program,
     **kwargs):
 
-    query=None
 
-    csv_parquet_converter.duckdb_read_query_write(input_path, output_path, query, tmpdir, memory, numb_threads=nproc, compress_program=compress_program, UTIL_NAME="pairtools_parquet_csv_to_parquet")
+    convert_pairs(
+        input_path,
+        output_path,
+        util_name="pairtools_parquet_csv_to_parquet",
+        nproc=nproc,
+        tmpdir=tmpdir,
+        memory=memory,
+        compress_program=compress_program,
+        **kwargs,
+    )
     
 if __name__ == "__main__":
     csv_to_parquet()

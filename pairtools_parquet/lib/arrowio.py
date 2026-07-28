@@ -35,10 +35,18 @@ DEFAULT_BLOCK_SIZE = 1 << 24
 
 PARQUET_SUFFIXES = (".parquet", ".pq")
 
+#: Extensions pairtools' auto_open treats as compressed.
+COMPRESSED_SUFFIXES = (".gz", ".bz2", ".lz4")
+
 
 def is_parquet(path):
     """Whether `path` names a Parquet file, by extension."""
     return str(path).lower().endswith(PARQUET_SUFFIXES)
+
+
+def compresses_by_extension(path):
+    """Whether text written to `path` should be compressed, by extension."""
+    return str(path).lower().endswith(COMPRESSED_SUFFIXES)
 
 
 def read_header(path, nproc_in=3, cmd_in=None):
@@ -278,7 +286,13 @@ class PairsWriter:
         # side of the package.
         from .csv_parquet_converter import choose_compressor
 
-        _, command = choose_compressor(compress_program, threads=nproc_out)
+        # Whether to compress is decided by the extension, as pairtools'
+        # auto_open does; --compress-program only picks which compressor. A
+        # plain `.pairs` output must be plain text, however that flag is set.
+        if compresses_by_extension(self.path):
+            _, command = choose_compressor(compress_program, threads=nproc_out)
+        else:
+            command = []
 
         output_file = self._stack.enter_context(open(self.path, "wb"))
         if command:

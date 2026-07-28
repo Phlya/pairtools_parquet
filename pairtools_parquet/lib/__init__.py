@@ -7,6 +7,7 @@ from . import (
     duckdb_utils,
     duckdbio,
     csv_parquet_converter,
+    merge,
     select,
     sort,
 )

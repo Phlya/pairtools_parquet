@@ -11,10 +11,15 @@ Tools that need Python-side processing use :mod:`pairtools_parquet.lib.arrowio`
 instead; this module is for the ones that do not.
 """
 
+import os
+
 from pairtools.lib import headerops, pairsam_format
 
+from .._logging import get_logger
 from . import arrowio, headerio
 from .schema import duckdb_types_from_columns
+
+logger = get_logger()
 
 
 def sql_string(value):
@@ -159,6 +164,30 @@ def copy_to_parquet(con, query, output_path, header, row_group_size=None):
             query=query, path=sql_string(output_path), options=", ".join(options)
         )
     )
+
+
+def run_with_chrom_enum_fallback(run, output_path, description="operation"):
+    """Call ``run(use_chrom_enum=True)``, retrying without the ENUM if needed.
+
+    The chromosome ENUM makes comparisons integer-wide, but its domain comes
+    from the header and DuckDB raises rather than nulling on a value outside
+    it. A file whose header simply does not list every chromosome it contains
+    is not corrupt, so it must still be processed -- just more slowly.
+    """
+    try:
+        run(True)
+    except Exception as error:
+        if not is_enum_domain_error(error):
+            raise
+        logger.warning(
+            "input contains a chromosome absent from its header; redoing the %s "
+            "without the chromosome ENUM optimization",
+            description,
+        )
+        # A partial output may already exist from the failed attempt.
+        if output_path and os.path.exists(str(output_path)):
+            os.remove(str(output_path))
+        run(False)
 
 
 def result_batches(result):

@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 ### Added
+- `merge`, ported from `pairtools merge`. Inputs may be a mix of `.pairs`,
+  `.pairs.gz` and `.parquet`; the output is whichever the extension names.
 - `lib/arrowio.py`, an Arrow record-batch I/O layer. Every tool reads and writes
   through it, so `.pairs`, `.pairs.gz` and `.parquet` are interchangeable
   wherever a path is accepted. A `.pairs` file round-trips through Parquet
@@ -32,6 +34,9 @@
   with a `?` silently matched nothing.
 - A `.pairs` file with a header and no data rows can be read, so an empty
   `select` result can be fed to another tool.
+- Text output is now compressed only when the output extension says so, as
+  `pairtools` does. `-o out.pairs` previously produced a gzip-compressed file
+  named `.pairs` unless `--compress-program none` was passed explicitly.
 
 ### Changed (breaking)
 - **Renamed the package from `pairs_to_parquet` to `pairtools_parquet`**, along
