@@ -170,6 +170,28 @@ Since that is the default, `evaluate_df` fails on most real conditions. We pass
 
 ## Version constraints we work around
 
+### `parse --drop-seq` and `--add-columns seq` segfault against pysam 0.24
+
+pairtools declares `pysam>=0.15.0` with no upper bound, but ships
+`AlignedSegmentPairtoolized`, a compiled Cython subclass of pysam's
+`AlignedSegment`. Against pysam 0.24.0 any path that touches a read's sequence
+crashes the interpreter:
+
+```
+Fatal Python error: Segmentation fault
+  File "pairtools/lib/parse.py", line 361 in parse_pysam_entry     # algn["seq"] = sam.seq
+  File "pairtools/lib/parse.py", line 1502 in write_pairsam        # sam.query_sequence = ""
+```
+
+`pairtools parse` crashes on its own, identically to ours — we call the same
+code — so this is an ABI mismatch to pin, not a bug either package can fix in
+Python. An upper bound on the pysam requirement, or a rebuild against the
+installed pysam, would resolve it.
+
+`tests/test_parse.py:reference` skips a parity case when the pairtools run dies
+of a signal, so those option combinations are reported as skipped rather than
+silently passing on two identical crashes.
+
 ### `region_match` is not in any release
 
 Added in open2c/pairtools#278, after 1.1.2. `lib/select.py` installs upstream's
@@ -179,6 +201,22 @@ pairtools. Delete `_backport_region_match` once the declared pairtools minimum
 contains it.
 
 ## Changes that would let us drop local code
+
+### A column-list return from `write_pairsam`, and a function for `parse`'s columns
+
+`lib/parse.py:write_pairsam` builds a list of fields and then joins and writes
+it in one statement, so the only way to get the fields rather than the line is
+to split the line again. We pass `streaming_classify` a sink that does exactly
+that (via the CSV reader, so the conversion matches the one every .pairs file
+goes through), rather than copy the ~40 lines that know how to pack SAM
+records and drop sequences. Splitting the function in two — `pairsam_columns()`
+returning the list, `write_pairsam()` joining and writing it — would remove the
+round trip.
+
+Likewise, the column bookkeeping at `cli/parse.py:parse_py` (and its verbatim
+copy in `cli/parse2.py`) is inline in the command body, so a caller that writes
+the pairs somewhere else has to restate it. As a function it would be reusable
+by both commands and by us.
 
 ### A DataFrame-iterator entry point for `dedup`
 

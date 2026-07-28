@@ -43,6 +43,23 @@ LOW_CARDINALITY_COLUMNS = ("chrom1", "chrom2", "strand1", "strand2", "pair_type"
 INT_TYPE = pa.int32()
 
 
+def declared_type(column):
+    """The Python type pairtools declares for a column, or None.
+
+    ``pairtools parse --add-columns`` names its columns by appending the side to
+    the base name -- ``mapq`` becomes ``mapq1`` and ``mapq2`` -- while
+    ``DTYPES_EXTRA_COLUMNS`` is keyed by the base name alone. Looking up the
+    full name only, as this did, silently typed every one of those columns as a
+    string, which is why ``select 'mapq1>=30'`` used to fail on a comparison
+    between str and int.
+    """
+    if column in DTYPES:
+        return DTYPES[column]
+    if column[-1:] in ("1", "2"):
+        return DTYPES.get(column[:-1])
+    return None
+
+
 def arrow_type(column, dict_encode=False):
     """Return the Arrow type for a single .pairs column.
 
@@ -53,7 +70,7 @@ def arrow_type(column, dict_encode=False):
         index_type = pa.int16() if column in ("chrom1", "chrom2") else pa.int8()
         return pa.dictionary(index_type, pa.string())
 
-    if DTYPES.get(column) is int:
+    if declared_type(column) is int:
         return INT_TYPE
 
     return pa.string()
@@ -85,5 +102,5 @@ def duckdb_types_from_columns(columns):
     Used when DuckDB, rather than pyarrow, reads a .pairs text file.
     """
     return {
-        col: "INTEGER" if DTYPES.get(col) is int else "VARCHAR" for col in columns
+        col: "INTEGER" if declared_type(col) is int else "VARCHAR" for col in columns
     }

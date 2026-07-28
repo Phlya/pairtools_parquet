@@ -77,7 +77,7 @@ def _csv_read_options(columns, block_size):
     return pacsv.ReadOptions(column_names=list(columns), block_size=block_size)
 
 
-def _csv_parse_options():
+def csv_parse_options():
     # .pairs is strictly tab-separated with no quoting: a readID containing a
     # double quote is data, not a quoted field.
     return pacsv.ParseOptions(
@@ -89,7 +89,7 @@ def _csv_parse_options():
     )
 
 
-def _csv_convert_options(schema, columns=None):
+def csv_convert_options(schema, columns=None):
     # Nothing in .pairs is null: unmapped reads use the '!' and 0 sentinels, and
     # a readID of "NA" or "null" must survive as that string.
     return pacsv.ConvertOptions(
@@ -234,8 +234,8 @@ def _open_text(path, columns, block_size, nproc_in, cmd_in, column_names=None):
         reader = pacsv.open_csv(
             _binary_stream(instream),
             read_options=_csv_read_options(column_names, block_size),
-            parse_options=_csv_parse_options(),
-            convert_options=_csv_convert_options(schema, columns),
+            parse_options=csv_parse_options(),
+            convert_options=csv_convert_options(schema, columns),
         )
     except pa.ArrowInvalid as error:
         # A header with no data rows is a valid .pairs file -- `select` that

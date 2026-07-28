@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 ### Added
+- `parse` and `parse2`, ported from their pairtools counterparts. The parser is
+  pairtools' own `streaming_classify`, called unchanged; only its output is
+  redirected, from formatted text lines into Arrow batches. `parse -o x.parquet`
+  produces exactly what `parse -o x.pairs` followed by `csv-to-parquet` would,
+  without the text round trip. `--output-stats` and
+  `--output-parsed-alignments` are unchanged.
+- `split`, ported from `pairtools split`. The pairs go to any supported format
+  and the SAM records to text, .bam or stdout. With `--output-pairs` alone and
+  Parquet input, the `sam1`/`sam2` columns are never read; from text input
+  `pairtools split` is faster, since it splits lines rather than typing fields.
 - `header`, ported from `pairtools header`, with all four subcommands —
   `generate`, `transfer`, `set-columns` and `validate-columns`. Headers cross
   formats: the header of a `.parquet` file can be transferred onto a `.pairs`
@@ -72,6 +82,11 @@
   `read_csv` reads an empty field as NULL by default, but `.pairs` has no null:
   an empty field is the empty string, and `phase` reads an empty `XB` tag as
   "no alternative alignment".
+- Columns added by `parse --add-columns` now get the type pairtools declares
+  for them. `DTYPES_EXTRA_COLUMNS` is keyed by the base name (`mapq`) while the
+  columns are named per side (`mapq1`, `mapq2`), so the lookup missed and every
+  one of them was typed as a string — which made `select 'mapq1>=30'` fail
+  comparing a str to an int, where `pairtools select` works.
 - Header lines no longer lose their trailing whitespace when written as text.
   `pairtools header generate` with no `--assembly` emits `#genome_assembly: `
   with a trailing space, and `headerops.get_header` keeps it, so stripping it

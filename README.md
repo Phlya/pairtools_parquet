@@ -81,6 +81,10 @@ $ pip install -e .
 
 - `header`: `generate`, `transfer`, `set-columns` and `validate-columns`. Headers move between formats, so one generated onto a `.parquet` can be transferred onto a `.pairs` and back.
 
+- `parse` / `parse2`: extract pairs from `.sam`/`.bam`, writing Parquet directly. The parser is pairtools' own, and pysam dominates the runtime, so parsing itself is no faster — what goes is the pipeline's first text round trip (on 400k read pairs: 5.4s straight to Parquet against 5.5s + 1.2s for `pairtools parse` then `csv-to-parquet`).
+
+- `split`: separate a `.pairsam` back into pairs and SAM. From Parquet, `--output-pairs` alone reads only the columns it writes, skipping `sam1`/`sam2` entirely. From text there is no such saving — every column has to be parsed either way, and `pairtools split` is faster there, since it splits lines rather than typing fields.
+
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
 
