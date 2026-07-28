@@ -11,5 +11,6 @@ from . import (
     merge,
     select,
     sort,
+    stats,
     transform,
 )

@@ -48,6 +48,19 @@ a Parquet file has a real schema, so there is no way to write 9 columns while
 declaring 8. The bodies are identical to pairtools; only the header differs,
 and only under `--keep-parent-id --output-unmapped`.
 
+### `stats --merge` output ordering is not reproducible
+
+`pairtools stats --merge` writes its keys in an order that varies between
+processes — running it twice on the same inputs can put `pair_types/UU` before
+or after `pair_types/NU`. The values are always the same; only the line order
+moves, which is enough to break byte-comparison of pipeline outputs and to make
+diffs noisy. It looks like a set iteration somewhere in `PairCounter.__add__`
+picking up string hash randomization.
+
+We delegate to `do_merge`, so we inherit the behaviour rather than papering
+over it; `tests/test_stats.py` compares merged stats as sets of lines and says
+why.
+
 ### `headerops.append_columns` mutates its argument
 
 It rewrites the `#columns` line of the list it is passed and returns that same

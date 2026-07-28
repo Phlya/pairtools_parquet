@@ -63,6 +63,8 @@ $ pip install -e .
 
 - `dedup`: find and remove PCR/optical duplicates, with statistics. Uses pairtools' own algorithm, so results match exactly.
 
+- `stats`: summary statistics, and merging of stats files.
+
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.
 
 

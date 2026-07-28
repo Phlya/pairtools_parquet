@@ -187,6 +187,7 @@ def common_io_options(func):
 
 from . import (
     dedup,
+    stats,
     merge,
     sort,
     select, 

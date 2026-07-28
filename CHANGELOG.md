@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 ### Added
+- `stats`, ported from `pairtools stats`, including `--filter`, `--yaml`,
+  `--bytile-dups` and `--merge`. Statistics come from pairtools' own
+  `PairCounter`, so they are identical.
 - `dedup`, ported from `pairtools dedup`. The algorithm is pairtools' own —
   every chunk goes through its `_dedup_chunk` unchanged — so output and
   statistics are identical. The `scipy` and `sklearn` backends are supported;
