@@ -295,6 +295,82 @@ def test_merge_matches_pairtools(tmp_path, mock_pairs_path):
     assert read_pairs_body(reference) == read_pairs_body(ours)
 
 
+TIED_ROWS_PER_INPUT = 150_000
+
+
+@pytest.fixture
+def tied_inputs(tmp_path):
+    """Two sorted inputs whose rows all tie on every sort key.
+
+    Unmapped pairs all carry `! 0 ! 0`, so on a real library this is not a
+    corner case: it is every unmapped read, hundreds of thousands of them. Big
+    enough to span several scan batches, which is what it takes for DuckDB's
+    parallel scans to hand the sort its rows out of order.
+    """
+    header = [
+        "## pairs format v1.0.0",
+        "#shape: upper triangle",
+        "#chromsize: chr1 10000",
+        "#sorted: chr1-chr2-pos1-pos2",
+        "#columns: readID chrom1 pos1 chrom2 pos2 strand1 strand2 pair_type",
+    ]
+    paths = []
+    for half in range(2):
+        rows = [
+            ("r{}_{}".format(half, i), "!", 0, "!", 0, "-", "-", "NN")
+            for i in range(TIED_ROWS_PER_INPUT)
+        ]
+        text = write_pairs(tmp_path / "tied{}.pairs".format(half), header, rows)
+        as_parquet = tmp_path / "tied{}.parquet".format(half)
+        run_cli("csv-to-parquet", "-o", as_parquet, text)
+        paths.append((text, as_parquet))
+    return paths
+
+
+@pytest.mark.parametrize("fmt", ["pairs", "parquet"])
+def test_merge_is_stable_across_tied_rows(tmp_path, tied_inputs, fmt):
+    """Rows tied on every sort key keep input order, whatever the format.
+
+    `pairtools merge` runs `sort --merge` without `-s`, which does not re-sort
+    tied rows -- it merges them, so ties come out in input order: the first
+    file's rows, then the second's. Reproducing that needs an explicit
+    tie-break, because DuckDB's sort is not stable and its scans are parallel.
+    Without one the answer differed between Parquet and text input, and between
+    runs.
+    """
+    index = 0 if fmt == "pairs" else 1
+    inputs = [paths[index] for paths in tied_inputs]
+    ours = tmp_path / "merged.{}".format(fmt)
+    run_cli("merge", "--nproc", "8", "-o", ours, *inputs)
+
+    if fmt == "parquet":
+        body = read_parquet_body(ours)
+    else:
+        body = read_pairs_body(ours)
+
+    read_ids = [line.split("\t")[0] for line in body]
+    expected = ["r0_{}".format(i) for i in range(TIED_ROWS_PER_INPUT)]
+    expected += ["r1_{}".format(i) for i in range(TIED_ROWS_PER_INPUT)]
+    assert read_ids == expected
+
+
+def test_merge_of_tied_rows_matches_pairtools(tmp_path, tied_inputs):
+    """And the order we settled on is upstream's, not merely a stable one."""
+    text_inputs = [paths[0] for paths in tied_inputs]
+    parquet_inputs = [paths[1] for paths in tied_inputs]
+
+    reference = tmp_path / "ref.pairs"
+    run_pairtools("merge", "-o", reference, *text_inputs)
+
+    from_text = tmp_path / "text.pairs"
+    from_parquet = tmp_path / "parquet.parquet"
+    run_cli("merge", "--nproc", "8", "-o", from_text, *text_inputs)
+    run_cli("merge", "--nproc", "8", "-o", from_parquet, *parquet_inputs)
+
+    assert read_pairs_body(reference) == read_pairs_body(from_text)
+    assert read_pairs_body(reference) == read_parquet_body(from_parquet)
+
+
 def test_merge_header_matches_pairtools(tmp_path, mock_pairs_path):
     """Merging must not re-mark the header as sorted.
 

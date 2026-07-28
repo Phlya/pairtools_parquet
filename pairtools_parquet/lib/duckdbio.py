@@ -86,11 +86,21 @@ def is_enum_domain_error(error):
     return "Conversion Error" in message and "Could not convert string" in message
 
 
-def scan_sql(path, header, nproc_in=3, chrom_type=None):
+#: Column name :func:`scan_sql` exposes a file-order row number under.
+ROW_NUMBER_COLUMN = "__rid"
+
+
+def scan_sql(path, header, nproc_in=3, chrom_type=None, row_number=False):
     """Return the SQL FROM-clause that reads `path` natively in DuckDB.
 
     Raises ValueError for inputs DuckDB cannot open by path, e.g. stdin; the
     caller should fall back to scanning an Arrow reader for those.
+
+    With `row_number`, the scan also yields :data:`ROW_NUMBER_COLUMN`, the
+    row's position in the file. Only Parquet can do this natively, via
+    ``file_row_number``; for text the caller has to count the rows itself with
+    :func:`arrowio.with_row_ids`, so this raises rather than returning a scan
+    whose ordinal would be wrong.
     """
     path = str(path)
     if path == "-":
@@ -99,17 +109,29 @@ def scan_sql(path, header, nproc_in=3, chrom_type=None):
     columns = headerops.extract_column_names(header)
 
     if arrowio.is_parquet(path):
-        scan = "read_parquet({})".format(sql_string(path))
-        if chrom_type is None:
+        scan = "read_parquet({}{})".format(
+            sql_string(path), ", file_row_number=true" if row_number else ""
+        )
+        if chrom_type is None and not row_number:
             return scan
         # Parquet carries its own types, so the ENUM has to be applied on top.
         projected = ", ".join(
             "{col}::{type} AS {col}".format(col=quote_identifier(col), type=chrom_type)
-            if col in CHROM_COLUMNS
+            if chrom_type is not None and col in CHROM_COLUMNS
             else quote_identifier(col)
             for col in columns
         )
+        if row_number:
+            projected += ", file_row_number AS {}".format(
+                quote_identifier(ROW_NUMBER_COLUMN)
+            )
         return "(SELECT {} FROM {})".format(projected, scan)
+
+    if row_number:
+        raise ValueError(
+            "DuckDB's CSV scanner cannot number rows in file order; "
+            "count them with arrowio.with_row_ids instead"
+        )
 
     if not columns:
         raise ValueError(

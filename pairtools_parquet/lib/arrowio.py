@@ -5,8 +5,9 @@ Every tool reads through :func:`open_pairs` and writes through
 ``.pairs`` text file, a ``.pairs.gz``, or a ``.parquet``. Both directions are
 streaming: a file is never held in memory in full.
 
-The module deliberately depends only on ``pyarrow`` and ``pairtools``, not on
-anything else in this package, so it can move into pairtools unchanged.
+The module deliberately depends only on ``pyarrow``, ``numpy`` and
+``pairtools`` -- all of which pairtools itself already requires -- and on
+nothing else in this package, so it can move into pairtools unchanged.
 
 Known limitation: pyarrow's CSV writer refuses to emit a value containing a
 double quote when quoting is disabled, and .pairs is an unquoted format, so a
@@ -19,6 +20,7 @@ import contextlib
 import subprocess
 import sys
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
@@ -151,6 +153,43 @@ def open_pairs(
             path, columns, block_size, nproc_in, cmd_in, column_names
         )
     return header, _reader_from_batches(batches, fallback)
+
+
+def with_row_ids(reader, columns=None, counter=None, name="rid"):
+    """Wrap `reader` in one that prepends a file-order row id.
+
+    DuckDB has no equivalent for text input: ``row_number() OVER ()`` counts in
+    the order rows reach the window operator, and its CSV scanner is parallel,
+    so that is not the order they are in the file. ``read_parquet`` does expose
+    ``file_row_number``, but only for Parquet. Counting here is exact for every
+    input format, because an Arrow reader is sequential.
+
+    `counter` is a one-element list, so a caller that needs the total row count
+    can read it back once the reader has been drained.
+
+    Returns a ``RecordBatchReader``, so the result can be registered with
+    DuckDB and scanned like a table.
+    """
+    columns = list(columns) if columns is not None else reader.schema.names
+    if counter is None:
+        counter = [0]
+
+    def batches():
+        for batch in reader:
+            rid = pa.array(
+                np.arange(counter[0], counter[0] + batch.num_rows, dtype=np.int64)
+            )
+            counter[0] += batch.num_rows
+            yield pa.RecordBatch.from_arrays(
+                [rid] + [batch.column(column) for column in columns],
+                names=[name] + columns,
+            )
+
+    schema = pa.schema(
+        [pa.field(name, pa.int64())]
+        + [reader.schema.field(column) for column in columns]
+    )
+    return pa.RecordBatchReader.from_batches(schema, batches())
 
 
 def _rename(batches, fallback, column_names, path):

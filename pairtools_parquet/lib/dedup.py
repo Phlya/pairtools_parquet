@@ -339,25 +339,6 @@ def duplicate_windows(con, keys, p1, p2, r, method, n_rows, window, carryover):
             keeper, keeper_lo = None, 0
 
 
-def _batches_with_row_id(reader, columns, counter):
-    """Re-emit `reader`'s batches carrying a file-order row id.
-
-    DuckDB's own ``row_number() OVER ()`` is not usable for this: its CSV
-    scanner is parallel, so the order rows reach the window operator is not the
-    order they are in the file. The Arrow reader is sequential, so counting
-    here is exact for every input format.
-    """
-    for batch in reader:
-        rid = pa.array(
-            np.arange(counter[0], counter[0] + batch.num_rows, dtype=np.int64)
-        )
-        counter[0] += batch.num_rows
-        yield pa.RecordBatch.from_arrays(
-            [rid] + [batch.column(name) for name in columns],
-            names=["rid"] + list(columns),
-        )
-
-
 def load_key_table(con, input_path, columns, c1, c2, unmapped_chrom, **kwargs):
     """Build the DuckDB table the neighbour search runs over, and count rows.
 
@@ -395,10 +376,7 @@ def load_key_table(con, input_path, columns, c1, c2, unmapped_chrom, **kwargs):
         nproc_in=kwargs.get("nproc_in", 3),
         cmd_in=kwargs.get("cmd_in", None),
     )
-    indexed = pa.RecordBatchReader.from_batches(
-        pa.schema([pa.field("rid", pa.int64())] + list(reader.schema)),
-        _batches_with_row_id(reader, list(columns), counter),
-    )
+    indexed = arrowio.with_row_ids(reader, list(columns), counter)
     con.register("pairs_keys", indexed)
     con.execute(
         "CREATE OR REPLACE TEMP TABLE keys AS "
@@ -436,11 +414,7 @@ def parent_read_ids(con, dup_rid, parent_rid, input_path, **kwargs):
                 cmd_in=kwargs.get("cmd_in", None),
             )
             con.register(
-                "read_ids",
-                pa.RecordBatchReader.from_batches(
-                    pa.schema([pa.field("rid", pa.int64())] + list(reader.schema)),
-                    _batches_with_row_id(reader, ["readID"], counter),
-                ),
+                "read_ids", arrowio.with_row_ids(reader, ["readID"], counter)
             )
 
         return (

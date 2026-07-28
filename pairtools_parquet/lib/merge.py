@@ -170,6 +170,46 @@ def _merge_staged(
         )
 
 
+#: Column the merge tags each row with to say which input it came from.
+SOURCE_COLUMN = "__src"
+
+
+def _source_sql(con, index, path, header, columns, nproc_in, chrom_type,
+                numbered):
+    """The FROM-clause for one input, carrying a row number where asked.
+
+    Parquet numbers its own rows, so it keeps DuckDB's native scan. Text has no
+    such column -- DuckDB's CSV scanner is parallel, so nothing it can compute
+    is in file order -- and is read through an Arrow reader instead, which is
+    sequential and can therefore count. The reader is registered per call
+    because a `RecordBatchReader` is drained once, and the ENUM fallback may
+    run the whole query a second time.
+    """
+    if not numbered or arrowio.is_parquet(path):
+        return duckdbio.scan_sql(
+            path, header, nproc_in=nproc_in, chrom_type=chrom_type,
+            row_number=numbered,
+        )
+
+    _, reader = arrowio.open_pairs(path, columns=list(columns), nproc_in=nproc_in)
+    name = "merge_input_{}".format(index)
+    con.register(name, arrowio.with_row_ids(
+        reader, list(columns), name=duckdbio.ROW_NUMBER_COLUMN
+    ))
+    if chrom_type is None:
+        return quote_identifier(name)
+    projected = ", ".join(
+        "{col}::{type} AS {col}".format(col=quote_identifier(col), type=chrom_type)
+        if col in duckdbio.CHROM_COLUMNS
+        else quote_identifier(col)
+        for col in columns
+    )
+    return "(SELECT {}, {} FROM {})".format(
+        projected, quote_identifier(duckdbio.ROW_NUMBER_COLUMN),
+        quote_identifier(name),
+    )
+
+
 def _merge_files(
     paths,
     path_headers,
@@ -206,21 +246,43 @@ def _merge_files(
             # Column names are projected explicitly: UNION ALL matches by
             # position, and all_same_columns only guarantees the same set.
             parts = []
-            for path, path_header in zip(paths, path_headers):
-                parts.append(
-                    "SELECT {} FROM {}".format(
-                        projection,
-                        duckdbio.scan_sql(
-                            path, path_header, nproc_in=nproc_in,
-                            chrom_type=chrom_type,
-                        ),
+            for index, (path, path_header) in enumerate(zip(paths, path_headers)):
+                source = _source_sql(
+                    con, index, path, path_header, columns,
+                    nproc_in=nproc_in, chrom_type=chrom_type,
+                    numbered=not concatenate,
+                )
+                ordinals = (
+                    "" if concatenate
+                    else ", {} AS {}, {}".format(
+                        index, quote_identifier(SOURCE_COLUMN),
+                        quote_identifier(duckdbio.ROW_NUMBER_COLUMN),
                     )
+                )
+                parts.append(
+                    "SELECT {}{} FROM {}".format(projection, ordinals, source)
                 )
 
             query = " UNION ALL ".join(parts)
             if not concatenate:
-                query += " ORDER BY {}".format(
-                    ", ".join(quote_identifier(key) for key in DEFAULT_SORT_KEYS)
+                # The tie-break is what makes this a *merge* rather than a
+                # sort. Rows equal on all five keys -- every unmapped pair
+                # shares `! 0 ! 0` -- would otherwise come out in whatever
+                # order the scan produced, which differs between formats and
+                # between runs, since DuckDB's sort is not stable and its
+                # scans are parallel. Ordering by (input, row within input)
+                # reproduces `sort --merge`: the first file's tied rows, then
+                # the second's, each in file order.
+                #
+                # ORDER BY sits in an outer query rather than after the UNION
+                # so that it is the last operator: the ordinals can be dropped
+                # from the projection without a post-sort operator that might
+                # not preserve the order it was handed.
+                query = "SELECT {} FROM ({}) ORDER BY {}, {}, {}".format(
+                    projection, query,
+                    ", ".join(quote_identifier(key) for key in DEFAULT_SORT_KEYS),
+                    quote_identifier(SOURCE_COLUMN),
+                    quote_identifier(duckdbio.ROW_NUMBER_COLUMN),
                 )
 
             if arrowio.is_parquet(output):

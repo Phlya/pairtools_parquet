@@ -4,30 +4,6 @@
 ---
 
 ## [Unreleased]
-### Known issues
-- `merge` orders rows that tie on all five sort keys differently depending on
-  whether it read Parquet or text. The unmapped rows all carry
-  `! 0 ! 0`, so on a real library that is every unmapped pair — 364,003 of them
-  in the 5.6M benchmark, coming out in one order from text and another from
-  Parquet. No pair is lost, gained or altered, and the mapped rows are
-  unaffected, but the two files do not compare equal.
-  Both paths run one `UNION ALL ... ORDER BY chrom1, chrom2, pos1, pos2,
-  pair_type` in DuckDB. There is no tie-break after those five keys and
-  DuckDB's sort is not stable, so tied rows come out in whatever order the scan
-  produced: Parquet row groups are read in parallel and reorder them, the CSV
-  scan happens not to. The text path therefore matches `pairtools merge`
-  exactly and the Parquet path does not.
-  `pairtools merge` shells out to GNU `sort --merge` without `-s`, which does
-  not re-sort tied rows -- it merges them, so ties come out in input order:
-  the first file's tied rows, then the second's. That was confirmed against the
-  reference output, so the fix is to make the ORDER BY stable by appending
-  (input index, row index within input). Parquet has `file_row_number`; the CSV
-  scan has no equivalent in DuckDB and would need the Arrow row-id approach
-  `dedup` already uses in `_batches_with_row_id`.
-  Found by `benchmarks/run.py`, which fails the run when our own two paths
-  disagree. It does not reproduce on the test fixtures, which have too few
-  unmapped rows to span a batch boundary.
-
 ### Added
 - `benchmarks/`, so every speedup in the README can be reproduced rather than
   taken on trust. `python benchmarks/run.py` generates a dataset, times each
@@ -183,6 +159,37 @@
   it to SQL, so the condition language is whatever pairtools supports.
 
 ### Fixed
+- `merge` is now a merge rather than a sort, and gives the same answer whatever
+  format its inputs are in. Rows tied on all five sort keys came out in a
+  different order from Parquet input than from text — and in a different order
+  between runs of the same command. Unmapped pairs all carry `! 0 ! 0`, so this
+  was not a corner case: 364,003 rows of the 5.6M benchmark, every one of them
+  a tie. No pair was ever lost, gained or altered, but the files did not
+  compare equal.
+  Both paths ran one `UNION ALL ... ORDER BY chrom1, chrom2, pos1, pos2,
+  pair_type`. Nothing followed those five keys, and DuckDB's sort is not
+  stable, so tied rows emerged in whatever order the parallel scans handed
+  them over. Ordering by `(input index, row number within input)` after the
+  keys reproduces what `sort --merge` does: `pairtools merge` passes GNU sort
+  neither `-s` nor a last-resort comparison, and `--merge` does not re-sort
+  tied rows, so upstream's order is the first file's ties followed by the
+  second's, each in file order. Verified against the reference output rather
+  than assumed.
+  Getting the row number needs different machinery per format. Parquet numbers
+  its own rows, so it keeps the native scan (`read_parquet(file_row_number=
+  true)`) and its timing is unchanged. DuckDB's CSV scanner cannot: it is
+  parallel, so `row_number() OVER ()` counts in arrival order, not file order —
+  the same trap `dedup` documents. Text inputs are therefore read through a
+  sequential Arrow reader, which costs them DuckDB's parallel CSV parsing:
+  merging two 5.6M-row text files went from 6.3s to 10.6s, against
+  `pairtools merge`'s 6.0s. Parquet in and Parquet out, the path this package
+  exists for, stays at 3.6s. A wrong answer is not worth 4s.
+  The row-numbering helper is now `arrowio.with_row_ids`, shared with `dedup`
+  rather than duplicated.
+  Found by `benchmarks/run.py`, which compares outputs as well as timing them
+  and fails the run when our own two paths disagree. It reproduces only at
+  scale, and only sometimes — the regression test asserts the stable order
+  itself, which holds regardless of how the scan happened to be scheduled.
 - `stats` re-cuts its input to `--chunksize` rows before counting, so text and
   Parquet input now produce identical output. Text batches are sized in bytes
   and Parquet batches in rows, and `PairCounter.add_pairs_from_dataframe`
