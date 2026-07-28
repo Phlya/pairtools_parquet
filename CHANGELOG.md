@@ -4,6 +4,30 @@
 ---
 
 ## [Unreleased]
+### Known issues
+- `merge` orders rows that tie on all five sort keys differently depending on
+  whether it read Parquet or text. The unmapped rows all carry
+  `! 0 ! 0`, so on a real library that is every unmapped pair — 364,003 of them
+  in the 5.6M benchmark, coming out in one order from text and another from
+  Parquet. No pair is lost, gained or altered, and the mapped rows are
+  unaffected, but the two files do not compare equal.
+  Both paths run one `UNION ALL ... ORDER BY chrom1, chrom2, pos1, pos2,
+  pair_type` in DuckDB. There is no tie-break after those five keys and
+  DuckDB's sort is not stable, so tied rows come out in whatever order the scan
+  produced: Parquet row groups are read in parallel and reorder them, the CSV
+  scan happens not to. The text path therefore matches `pairtools merge`
+  exactly and the Parquet path does not.
+  `pairtools merge` shells out to GNU `sort --merge` without `-s`, which does
+  not re-sort tied rows -- it merges them, so ties come out in input order:
+  the first file's tied rows, then the second's. That was confirmed against the
+  reference output, so the fix is to make the ORDER BY stable by appending
+  (input index, row index within input). Parquet has `file_row_number`; the CSV
+  scan has no equivalent in DuckDB and would need the Arrow row-id approach
+  `dedup` already uses in `_batches_with_row_id`.
+  Found by `benchmarks/run.py`, which fails the run when our own two paths
+  disagree. It does not reproduce on the test fixtures, which have too few
+  unmapped rows to span a batch boundary.
+
 ### Added
 - `benchmarks/`, so every speedup in the README can be reproduced rather than
   taken on trust. `python benchmarks/run.py` generates a dataset, times each
