@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 ### Added
+- `phase`, ported from `pairtools phase`, in both XB and XA tag modes, with
+  `--clean-output` and `--report-scores`.
 - `filterbycov`, ported from `pairtools filterbycov`. The coverage calculation
   is pairtools' own `_filterbycov`, called unchanged.
 - `restrict`, ported from `pairtools restrict`. About 2.8x faster than
@@ -58,6 +60,10 @@
   divergence; see UPSTREAM.md.
 - A `.pairs` file with a header and no data rows can be read, so an empty
   `select` result can be fed to another tool.
+- Empty fields no longer become NULL when converting text to Parquet. DuckDB's
+  `read_csv` reads an empty field as NULL by default, but `.pairs` has no null:
+  an empty field is the empty string, and `phase` reads an empty `XB` tag as
+  "no alternative alignment".
 - Text output is now compressed only when the output extension says so, as
   `pairtools` does. `-o out.pairs` previously produced a gzip-compressed file
   named `.pairs` unless `--compress-program none` was passed explicitly.

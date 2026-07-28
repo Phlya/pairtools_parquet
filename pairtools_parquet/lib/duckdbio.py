@@ -37,6 +37,11 @@ CHROM_COLUMNS = ("chrom1", "chrom2")
 
 CHROM_ENUM = "PAIRS_CHROM"
 
+#: A value no .pairs field will hold, used to disable DuckDB's NULL literal.
+#: DuckDB rejects an empty nullstr, and a NUL byte breaks its SQL parser, so
+#: this has to be a printable token instead.
+NEVER_A_PAIRS_VALUE = "__pairtools_parquet_never_null__"
+
 
 class EnumDomainError(Exception):
     """A value fell outside a declared ENUM domain."""
@@ -121,13 +126,19 @@ def scan_sql(path, header, nproc_in=3, chrom_type=None):
 
     # The header is skipped positionally: auto_detect would otherwise take the
     # last header line for column names.
+    #
+    # nullstr is set to a value no .pairs field can hold, because DuckDB
+    # otherwise reads an empty field as NULL. .pairs has no null: an empty
+    # field is the empty string, and tools depend on that -- `phase` reads an
+    # empty XB tag as "no alternative alignment" and calls .split() on it.
     return (
         "read_csv({path}, delim='\\t', skip={skip}, columns={columns}, "
-        "header=false, auto_detect=false)"
+        "header=false, auto_detect=false, nullstr={nullstr})"
     ).format(
         path=sql_string(path),
         skip=len(header),
         columns=column_types,
+        nullstr=sql_string(NEVER_A_PAIRS_VALUE),
     )
 
 

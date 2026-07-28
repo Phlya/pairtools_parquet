@@ -193,6 +193,38 @@ def test_quote_in_value_reads_but_cannot_be_written_as_text(tmp_path):
             writer.write_all(reader)
 
 
+def test_empty_fields_stay_empty_strings_in_parquet(tmp_path):
+    """.pairs has no NULL: an empty field is the empty string.
+
+    DuckDB's read_csv reads an empty field as NULL by default, which turned
+    e.g. an empty XB tag into None on conversion -- `phase` reads that tag as
+    "no alternative alignment" and calls .split() on it.
+    """
+    import subprocess
+    import sys
+
+    columns = ["readID", "chrom1", "pos1", "chrom2", "pos2", "strand1",
+               "strand2", "pair_type", "XB1"]
+    header = ["## pairs format v1.0.0", "#chromsize: chr1 1000",
+              "#columns: " + " ".join(columns)]
+    rows = [
+        ("r1", "chr1", 1, "chr1", 2, "+", "+", "UU", ""),
+        ("r2", "chr1", 3, "chr1", 4, "+", "+", "UU", "chr1,+5,100M,0,90,60;"),
+    ]
+    source = write_pairs(tmp_path / "in.pairs", header, rows)
+    out = tmp_path / "out.parquet"
+
+    subprocess.run(
+        [sys.executable, "-m", "pairtools_parquet", "csv-to-parquet",
+         "-o", str(out), str(source)],
+        check=True, capture_output=True,
+    )
+
+    values = pq.read_table(str(out)).column("XB1").to_pylist()
+    assert values == ["", "chr1,+5,100M,0,90,60;"]
+    assert None not in values
+
+
 def test_writer_casts_mismatched_batches(tmp_path):
     """A caller may hand over batches whose types differ from the schema."""
     header = HEADER

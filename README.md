@@ -71,6 +71,8 @@ $ pip install -e .
 
 - `filterbycov`: remove pairs from regions of unusually high coverage.
 
+- `phase`: assign pairs to parental haplotypes in a diploid genome.
+
 - `restrict`: assign pairs to restriction fragments.
 
 - `stats`: summary statistics, and merging of stats files.

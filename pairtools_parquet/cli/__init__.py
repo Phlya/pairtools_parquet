@@ -190,6 +190,7 @@ from . import (
     filterbycov,
     flip,
     markasdup,
+    phase,
     restrict,
     sample,
     stats,
