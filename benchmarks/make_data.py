@@ -219,9 +219,13 @@ class Dataset(object):
 
     @property
     def settings(self):
+        # `format` covers everything about the generator that the other keys
+        # do not: bump it whenever a change moves the data for unchanged
+        # settings, including one that only shifts the RNG stream, or caches
+        # built by the old code will be silently reused.
         return {"n_pairs": self.n_pairs, "dup_rate": self.dup_rate,
                 "seed": self.seed, "read_length": READ_LENGTH,
-                "chroms": len(CHROMS), "format": 2}
+                "chroms": len(CHROMS), "format": 3}
 
     def is_current(self):
         """True when the files on disk were built from these settings."""
