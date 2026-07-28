@@ -10,6 +10,7 @@ from . import (
     dedup,
     flip,
     markasdup,
+    restrict,
     sample,
     merge,
     select,

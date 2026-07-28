@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 ### Added
+- `restrict`, ported from `pairtools restrict`. About 2.8x faster than
+  upstream on a genome-scale fragment file (8.1s -> 2.9s for 540k pairs),
+  mostly by not loading the fragment BED with `np.genfromtxt`.
 - `flip`, `markasdup` and `sample`, ported from their pairtools counterparts.
   `sample` reproduces pairtools' per-row draw sequence, so a given `--seed`
   selects the same pairs as `pairtools sample` does.
@@ -42,6 +45,15 @@
 - `select` conditions that the SQL translation could not express now work:
   Python method calls and chained comparisons raised, and `wildcard_match`
   with a `?` silently matched nothing.
+- `flip` now settles after one pass for every input. For a pair whose two
+  sides are on the same chromosome *absent from the chromsizes file*,
+  `pairtools flip` compares only the chromosome names — equal, so it swaps the
+  sides on every run and never consults the positions. This is a deliberate
+  divergence from upstream, confined to exactly those rows; see UPSTREAM.md.
+- `restrict` no longer dies on a chromosome missing from the fragment file.
+  Upstream catches `ValueError` around a dict lookup that raises `KeyError`,
+  so its intended warn-and-continue path is unreachable. Also a deliberate
+  divergence; see UPSTREAM.md.
 - A `.pairs` file with a header and no data rows can be read, so an empty
   `select` result can be fed to another tool.
 - Text output is now compressed only when the output extension says so, as

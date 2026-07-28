@@ -74,9 +74,38 @@ The positions are never compared, so neither ordering is "upper triangular".
 Comparing `(chrom, pos)` rather than `chrom` alone in that branch would fix it,
 matching what the both-annotated branch does.
 
-We reproduce the behaviour, and `tests/test_smalltools.py` pins both that our
-double-flip matches upstream's and that flipping *is* idempotent for annotated
-chromosomes.
+**We deliberately diverge here**: `lib/flip.py` compares `(chrom, pos)` in that
+branch, so flipping settles after one pass for every input. The two agree on
+every other case — the only rows that differ are those whose two sides are on
+the *same* unannotated chromosome, where upstream's answer is not stable
+anyway. `tests/test_smalltools.py` pins that the divergence is confined to
+exactly those rows, that our flip is idempotent, and — via
+`test_pairtools_flip_oscillates` — that upstream still has the bug, so the
+test fails and tells us to drop the divergence once it is fixed.
+
+### `restrict` crashes on a chromosome with no annotated fragments
+
+`lib/restrict.py:find_rfrag` means to warn and return the unannotated
+sentinels for a chromosome missing from the fragment file:
+
+```python
+try:
+    rsites_chrom = rfrags[chrom]
+except ValueError as e:
+    warnings.warn(f"Chomosome {chrom} does not have annotated restriction fragments, return empty.")
+    return (UNANNOTATED_RFRAG, UNMAPPED_POS, UNMAPPED_POS)
+```
+
+but `rfrags` is a dict, so the lookup raises `KeyError`, which that clause does
+not catch. The recovery path is unreachable and `pairtools restrict` dies with
+a traceback — reproducible with any pairs file mentioning a scaffold the
+fragment BED omits. Catching `KeyError` would restore the intended behaviour.
+
+**We deliberately diverge here**: we do what the code intends — warn once per
+chromosome and emit `-1, 0, 0`. Matching a crash is not a useful form of
+parity. `tests/test_restrict.py` pins both our behaviour and, via
+`test_pairtools_restrict_crashes_on_missing_chromosome`, that upstream still
+crashes, so we learn when it is fixed.
 
 ### `stats --merge` output ordering is not reproducible
 

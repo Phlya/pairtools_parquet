@@ -66,11 +66,22 @@ def needs_flip(chrom1, chrom2, pos1, pos2, order):
     correct[annotated1 & ~annotated2] = True
     correct[annotated2 & ~annotated1] = False
 
-    # Neither annotated: fall back to comparing the names.
+    # Neither annotated: compare (name, pos), as the both-annotated branch
+    # compares (rank, pos). pairtools compares only the names here, which is
+    # false for two sides of the *same* unannotated chromosome, so it swaps
+    # them on every run and never looks at the positions -- flipping such a
+    # file repeatedly oscillates instead of settling on the upper triangle.
+    # See UPSTREAM.md; this is a deliberate divergence.
     neither = ~annotated1 & ~annotated2
     if neither.any():
         correct[neither] = np.array(
-            [c1 < c2 for c1, c2 in zip(chrom1[neither], chrom2[neither])], dtype=bool
+            [
+                (c1, p1) <= (c2, p2)
+                for c1, p1, c2, p2 in zip(
+                    chrom1[neither], pos1[neither], chrom2[neither], pos2[neither]
+                )
+            ],
+            dtype=bool,
         )
 
     return ~correct

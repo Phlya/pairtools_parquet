@@ -189,6 +189,7 @@ from . import (
     dedup,
     flip,
     markasdup,
+    restrict,
     sample,
     stats,
     merge,

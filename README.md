@@ -69,6 +69,8 @@ $ pip install -e .
 
 - `sample`: take a seeded random subset of pairs.
 
+- `restrict`: assign pairs to restriction fragments.
+
 - `stats`: summary statistics, and merging of stats files.
 
 Every tool takes `.pairs`, `.pairs.gz` or `.parquet` as input and writes whichever of those the output path's extension names, so the formats are interchangeable wherever a path is accepted.

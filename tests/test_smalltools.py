@@ -59,71 +59,110 @@ def mixed_pairs(tmp_path):
     return write_pairs(tmp_path / "mixed.pairs", HEADER, rows)
 
 
+ANNOTATED = {"chr1", "chr2", "chr3"}
+
+
+def same_unannotated_chromosome(line):
+    """Rows where we deliberately differ from pairtools (see UPSTREAM.md)."""
+    fields = line.split("\t")
+    return fields[1] == fields[3] and fields[1] not in ANNOTATED
+
+
 def test_flip_matches_pairtools(tmp_path, mixed_pairs, chromsizes):
+    """Identical to pairtools except for the case whose bug we fixed."""
     reference = tmp_path / "ref.pairs"
     ours = tmp_path / "ours.pairs"
 
     run_pairtools("flip", "-c", chromsizes, "-o", reference, mixed_pairs)
     run_cli("flip", "-c", chromsizes, "-o", ours, mixed_pairs)
 
-    assert read_pairs_body(reference) == read_pairs_body(ours)
+    theirs_body = read_pairs_body(reference)
+    ours_body = read_pairs_body(ours)
+    source_body = read_pairs_body(mixed_pairs)
+
+    differing = [
+        (src, a, b)
+        for src, a, b in zip(source_body, theirs_body, ours_body)
+        if a != b
+    ]
+    assert all(same_unannotated_chromosome(src) for src, _, _ in differing), (
+        "diverged from pairtools outside the same-unannotated-chromosome case"
+    )
+    # and that case must actually be present, or this proves nothing
+    assert any(same_unannotated_chromosome(l) for l in source_body)
 
     # the test is only meaningful if a good share of rows actually moved
-    flipped = sum(
-        1
-        for before, after in zip(read_pairs_body(mixed_pairs), read_pairs_body(ours))
-        if before != after
-    )
-    assert flipped > len(read_pairs_body(mixed_pairs)) // 4
+    flipped = sum(1 for before, after in zip(source_body, ours_body) if before != after)
+    assert flipped > len(source_body) // 4
+
+
+def test_flip_orders_same_unannotated_chromosome_by_position(tmp_path, chromsizes):
+    """Our fix: an unannotated chromosome is ordered by position, like any other.
+
+    pairtools compares only the chromosome names here, which are equal, so it
+    swaps the sides unconditionally. See UPSTREAM.md.
+    """
+    rows = [
+        ("lower", "chrUNKNOWN", 900, "chrUNKNOWN", 100, "-", "+", "RU"),
+        ("upper", "chrUNKNOWN", 100, "chrUNKNOWN", 900, "+", "-", "UR"),
+    ]
+    source = write_pairs(tmp_path / "unannotated.pairs", HEADER, rows)
+
+    ours = tmp_path / "ours.pairs"
+    run_cli("flip", "-c", chromsizes, "-o", ours, source)
+
+    body = read_pairs_body(ours)
+    for line in body:
+        fields = line.split("\t")
+        assert int(fields[2]) <= int(fields[4]), line
+    # the already-ordered pair is left alone
+    assert body[1].startswith("upper\tchrUNKNOWN\t100")
 
 
 def test_flip_through_parquet(tmp_path, mixed_pairs, chromsizes):
+    """Flipping must not depend on the format it reads and writes."""
     as_parquet = tmp_path / "in.parquet"
     run_cli("csv-to-parquet", "-o", as_parquet, mixed_pairs)
 
-    reference = tmp_path / "ref.pairs"
-    ours = tmp_path / "ours.parquet"
-    run_pairtools("flip", "-c", chromsizes, "-o", reference, mixed_pairs)
-    run_cli("flip", "-c", chromsizes, "-o", ours, as_parquet)
+    from_text = tmp_path / "text.pairs"
+    from_parquet = tmp_path / "parquet.parquet"
+    run_cli("flip", "-c", chromsizes, "-o", from_text, mixed_pairs)
+    run_cli("flip", "-c", chromsizes, "-o", from_parquet, as_parquet)
 
-    assert read_pairs_body(reference) == read_parquet_body(ours)
+    assert read_pairs_body(from_text) == read_parquet_body(from_parquet)
 
 
-def test_flip_twice_matches_pairtools_twice(tmp_path, mixed_pairs, chromsizes):
-    """Flipping is not idempotent upstream, and we match that too.
+def test_flip_is_idempotent(tmp_path, mixed_pairs, chromsizes):
+    """Flipping is a projection onto the upper triangle, so it must settle.
 
-    For a pair whose two sides are on the same chromosome *absent from the
-    chromsizes file*, `pairtools flip` decides by `chrom1 < chrom2`, which is
-    false when the names are equal -- so it swaps the sides on every run,
-    ignoring the positions, and oscillates. For annotated chromosomes it is
-    idempotent, as intended. See UPSTREAM.md.
+    This is the property `pairtools flip` loses for pairs on the same
+    unannotated chromosome, which oscillate there forever.
     """
-    ours = [tmp_path / "ours1.pairs", tmp_path / "ours2.pairs"]
-    theirs = [tmp_path / "ref1.pairs", tmp_path / "ref2.pairs"]
-
-    run_cli("flip", "-c", chromsizes, "-o", ours[0], mixed_pairs)
-    run_cli("flip", "-c", chromsizes, "-o", ours[1], ours[0])
-    run_pairtools("flip", "-c", chromsizes, "-o", theirs[0], mixed_pairs)
-    run_pairtools("flip", "-c", chromsizes, "-o", theirs[1], theirs[0])
-
-    assert read_pairs_body(theirs[1]) == read_pairs_body(ours[1])
-
-
-def test_flip_is_idempotent_for_annotated_chromosomes(tmp_path, chromsizes):
-    """Where the chromosomes are known, flipping twice is a no-op."""
-    rows = [
-        ("r1", "chr1", 900, "chr1", 100, "-", "+", "RU"),
-        ("r2", "chr2", 500, "chr1", 100, "+", "+", "UU"),
-        ("r3", "chr3", 100, "chr1", 900, "+", "-", "UR"),
-    ]
-    source = write_pairs(tmp_path / "annotated.pairs", HEADER, rows)
-
     once = tmp_path / "once.pairs"
     twice = tmp_path / "twice.pairs"
-    run_cli("flip", "-c", chromsizes, "-o", once, source)
+    run_cli("flip", "-c", chromsizes, "-o", once, mixed_pairs)
     run_cli("flip", "-c", chromsizes, "-o", twice, once)
 
     assert read_pairs_body(once) == read_pairs_body(twice)
+
+
+def test_pairtools_flip_oscillates(tmp_path, chromsizes):
+    """Pins the upstream behaviour our fix departs from.
+
+    If a future pairtools fixes this, this test fails and tells us the
+    divergence -- and the note in UPSTREAM.md -- can be retired.
+    """
+    rows = [("r1", "chrUNKNOWN", 100, "chrUNKNOWN", 900, "+", "-", "UR")]
+    source = write_pairs(tmp_path / "unannotated.pairs", HEADER, rows)
+
+    once = tmp_path / "ref1.pairs"
+    twice = tmp_path / "ref2.pairs"
+    run_pairtools("flip", "-c", chromsizes, "-o", once, source)
+    run_pairtools("flip", "-c", chromsizes, "-o", twice, once)
+
+    assert read_pairs_body(once) != read_pairs_body(twice), (
+        "pairtools flip no longer oscillates; our divergence can be removed"
+    )
 
 
 def test_markasdup_matches_pairtools(tmp_path, mock_pairs_path):
