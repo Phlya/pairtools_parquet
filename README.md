@@ -80,7 +80,7 @@ $ pip install -e .
 
 - `stats`: summary statistics, and merging of stats files.
 
-- `scaling`: contact frequency as a function of genomic distance. Reads only the six columns the binning looks at, so Parquet input skips the rest of the file. Without a `--view` it normalises P(s) by the genome the header describes; `pairtools scaling` parses those chromosome sizes and then discards them, leaving `end = -1` and an `n_bp2` that no longer measures anything (see UPSTREAM.md).
+- `scaling`: contact frequency as a function of genomic distance. Reads only the six columns the binning looks at, so Parquet input skips the rest of the file. It normalises P(s) by the genome the header describes, matching pairtools master; pairtools 1.1.x parses those chromosome sizes and then discards them, leaving `end = -1` and an `n_bp2` that no longer measures anything (see UPSTREAM.md).
 
 - `header`: `generate`, `transfer`, `set-columns` and `validate-columns`. Headers move between formats, so one generated onto a `.parquet` can be transferred onto a `.pairs` and back.
 
@@ -187,12 +187,14 @@ row and re-decides them, so the chain survives. It scales with density — 1 row
 per million pairs at 1M, 16 at 5.6M. `--backend scipy` reproduces pairtools
 exactly. See UPSTREAM.md.
 
-§ Also deliberate. `pairtools scaling` reads the header's chromosome sizes and
-then drops them, leaving every region's `end` at the `-1` sentinel, so the area
-each distance bin covers — the `n_bp2` column P(s) is normalised by — comes out
-of a negative region length. We use the sizes, which gives exactly what
-`pairtools scaling --view <a viewframe of those sizes>` gives. The `n_pairs`
-counts agree bin for bin. See UPSTREAM.md.
+§ A version gap, not a divergence: we match pairtools **master**, which the
+reference run here predates. pairtools 1.1.x reads the header's chromosome
+sizes and then drops them, leaving every region's `end` at the `-1` sentinel,
+so the area each distance bin covers — the `n_bp2` column P(s) is normalised by
+— comes out of a region one base long. Master keeps them, and so do we; our
+output is byte-identical to `pairtools scaling` run with master's
+`lib/scaling.py`. Against 1.1.x the `n_pairs` counts still agree bin for bin.
+See UPSTREAM.md.
 
 ¶ `merge` is the one tool whose *text* input is slower than pairtools —
 about 7.3s against 5.9s, best of four runs each. Rows tied on all five sort

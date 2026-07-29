@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """scaling against pairtools scaling.
 
-One deliberate divergence: without a `--view`, the chromosome sizes come from
-the file's own `#chromsize:` header lines. `pairtools scaling` passes
-`chromsizes=None` regardless, which leaves every region's end at -1 and makes
-`n_bp2` -- the area P(s) is normalised by -- meaningless. So the parity checks
-here compare against `pairtools scaling --view <the header's chromsizes>`,
-which is what our output equals exactly, rather than against a bare run.
+The chromosome sizes come from the file's own `#chromsize:` header lines, as
+they do in pairtools master. pairtools 1.1.x parses them and then drops them,
+leaving every region's end at -1 and making `n_bp2` -- the area P(s) is
+normalised by -- meaningless, so a bare run means different things on the two
+versions. The parity checks here therefore compare against `pairtools scaling
+--view <the header's chromsizes>`, which both versions answer identically and
+which is what our output equals exactly.
 """
 
 import pandas as pd
@@ -178,11 +179,15 @@ KEYS = ["chrom1", "chrom2", "strand1", "strand2", "min_dist", "max_dist"]
 
 
 def test_chromsizes_come_from_the_header(tmp_path, pairs):
-    """The point of the divergence: P(s) gets a real normalisation.
+    """The header's chromosome sizes reach the binning.
 
-    Upstream leaves every region end at the -1 sentinel, so the area each
-    distance bin covers is computed from a negative region length and `n_bp2`
-    -- what P(s) is divided by -- is not the genome's.
+    pairtools master takes them from `read_pairs`' third return value; 1.1.x
+    takes them and drops them, leaving every region end at the -1 sentinel, so
+    the area each distance bin covers is computed from a region one base long
+    and `n_bp2` -- what P(s) is divided by -- is not the genome's.
+
+    So this asserts our answer outright, and then, against whichever pairtools
+    is installed, either full equality or exactly that difference.
     """
     reference = tmp_path / "ref.tsv"
     ours = tmp_path / "ours.tsv"
@@ -192,10 +197,16 @@ def test_chromsizes_come_from_the_header(tmp_path, pairs):
     theirs = pd.read_csv(reference, sep="\t")
     mine = pd.read_csv(ours, sep="\t")
 
-    assert set(theirs["end1"]) == {-1}
     assert (mine["end1"] > 0).all()
-    # A -1 end leaves a region one base long, so upstream's areas are a
-    # rounding error next to the genome's.
+    assert mine["n_bp2"].sum() > 0
+    assert "!" not in set(mine["chrom1"]) | set(mine["chrom2"])
+
+    if not (set(theirs["end1"]) == {-1}):  # pairtools has the fix
+        assert read(reference) == read(ours)
+        return
+
+    # A -1 end leaves a region one base long, so 1.1.x's areas are a rounding
+    # error next to the genome's.
     assert mine["n_bp2"].sum() > 1000 * theirs["n_bp2"].sum()
 
     # The counting itself is untouched: every bin the two tables share holds
@@ -206,8 +217,8 @@ def test_chromsizes_come_from_the_header(tmp_path, pairs):
 
     # Knowing the chromosome sizes drops rows, and none that a P(s) curve
     # wants: bins reaching past the end of a chromosome, which are empty, and
-    # the unmapped `!` "region" upstream invents because with no sizes to go on
-    # it takes its regions from the data.
+    # the unmapped `!` "region" 1.1.x invents because with no sizes to go on it
+    # takes its regions from the data.
     dropped = theirs.merge(mine[KEYS], on=KEYS, how="left", indicator=True)
     dropped = dropped[dropped["_merge"] == "left_only"]
     assert len(dropped) > 0
@@ -216,12 +227,13 @@ def test_chromsizes_come_from_the_header(tmp_path, pairs):
     assert ((counted["chrom1"] == "!") | (counted["chrom2"] == "!")).all()
 
 
-def test_a_header_without_chromsizes_falls_back_to_upstreams_answer(tmp_path, pairs):
+def test_a_header_without_chromsizes_falls_back_to_sentinel_regions(tmp_path, pairs):
     """There is nothing better to give it, so the -1 sentinel stands.
 
-    `pairtools scaling` cannot read such a file at all -- `read_pairs` calls
-    `extract_chromsizes` unconditionally, which raises `IndexError` on a header
-    that declares none -- so there is no reference run to compare against.
+    `pairtools scaling` cannot read such a file at all, on any version --
+    `read_pairs` calls `extract_chromsizes` unconditionally, which zips the
+    parsed lines and indexes the result without checking there were any -- so
+    there is no reference run to compare against.
     """
     from conftest import read_pairs_body, read_pairs_header, write_pairs
 
@@ -237,7 +249,4 @@ def test_a_header_without_chromsizes_falls_back_to_upstreams_answer(tmp_path, pa
     mine = pd.read_csv(ours, sep="\t")
 
     assert set(mine["end1"]) == {-1}
-    # Which is upstream's answer for the same file with the sizes put back.
-    with_sizes = tmp_path / "ref_with_sizes.tsv"
-    run_pairtools("scaling", "-o", with_sizes, pairs)
-    assert read(with_sizes) == read(ours)
+    assert mine["n_pairs"].sum() > 0

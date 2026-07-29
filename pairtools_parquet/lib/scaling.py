@@ -134,13 +134,17 @@ def _at_least_one_chunk(chunks, schema):
 def header_chromsizes(input_path, nproc_in=3, cmd_in=None):
     """The chromosome sizes `input_path` declares, or None if it declares none.
 
-    Reading the header separately is safe even for a stream: `read_header`
-    remembers stdin, so the batches that follow still start at the first row.
+    This is what `compute_scaling` gets from ``read_pairs``' third return value
+    -- which it takes and drops in pairtools 1.1.x, and uses on master. Reading
+    the header separately is safe even for a stream: `read_header` remembers
+    stdin, so the batches that follow still start at the first row.
     """
     header = read_header(input_path, nproc_in=nproc_in, cmd_in=cmd_in)
     # `extract_chromsizes` zips the parsed lines and indexes the result without
     # checking there were any, so it raises IndexError rather than returning
-    # nothing on a header that declares none.
+    # nothing on a header that declares none. `read_pairs` calls it
+    # unconditionally, so pairtools cannot read such a file at all; we fall
+    # back to the sentinel regions instead.
     if not headerops.extract_fields(header, "chromsize"):
         return None
     chromsizes = headerops.extract_chromsizes(header)
@@ -167,30 +171,30 @@ def scaling_pairs(
     view : str, optional
         Path to a table of regions to restrict the calculation to, read with
         ``pd.read_table`` and so needing a named header row. It takes
-        precedence over the header's chromosome sizes, as it does upstream.
+        precedence over the chromosome sizes, as it does upstream.
 
     Notes
     -----
-    Without a view, the chromosome sizes are taken from the ``#chromsize:``
-    header lines. `pairtools scaling` passes ``chromsizes=None`` regardless,
-    which leaves every region's end at the sentinel -1, so the area each
-    distance bin covers comes out of a negative region length and the ``n_bp2``
-    column -- what P(s) is normalised by -- is not the genome's. Its own code
-    says "Pass the header to the instream so that it can parse the header
-    automatically", so this is the intent rather than a departure from it; the
-    header is read and then dropped. See UPSTREAM.md.
+    The chromosome sizes come from the ``#chromsize:`` header lines, which is
+    what pairtools master does and what its ``--view`` help has always
+    promised. pairtools 1.1.x reads them and drops them, leaving every region's
+    end at the sentinel -1, so the area each distance bin covers comes out of a
+    region one base long and the ``n_bp2`` column -- what P(s) is normalised by
+    -- is not the genome's. See UPSTREAM.md.
 
-    A header that declares no chromosome sizes still gets upstream's answer,
-    because there is nothing better to give it.
+    A header that declares no chromosome sizes falls back to those sentinel
+    regions, which is the best available answer: pairtools raises on such a
+    file rather than producing one.
     """
     regions = pd.read_table(view) if view is not None else None
-    chromsizes = None
-    if regions is None:
-        chromsizes = header_chromsizes(
-            input_path,
-            nproc_in=kwargs.get("nproc_in", 3),
-            cmd_in=kwargs.get("cmd_in", None),
-        )
+    # Use chromsizes from the header if not provided explicitly -- master's
+    # `compute_scaling` does this too, and also regardless of `regions`, since
+    # `bins_pairs_by_distance` ignores the sizes when it has regions.
+    chromsizes = header_chromsizes(
+        input_path,
+        nproc_in=kwargs.get("nproc_in", 3),
+        cmd_in=kwargs.get("cmd_in", None),
+    )
 
     cis_scalings, trans_levels = accumulate_scaling(
         scaling_chunks(

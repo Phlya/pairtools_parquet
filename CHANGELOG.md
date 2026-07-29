@@ -186,21 +186,23 @@
   it to SQL, so the condition language is whatever pairtools supports.
 
 ### Fixed
-- `scaling` normalises P(s) by the genome its input declares. Without a
-  `--view`, the chromosome sizes now come from the `#chromsize:` header lines.
-  `pairtools scaling` extracts them and then throws them away — `pairs_df, _, _
-  = pairsio.read_pairs(...)`, with the sizes going into the second `_` — so
-  every region's `end` stays at the `-1` sentinel, the area each distance bin
-  covers is computed from a region one base long, and `n_bp2` (which is what
-  the pair counts are divided by to get P(s)) is meaningless: 48 in total for a
-  file whose real answer is 300000. The unmapped `!` chromosome also becomes a
-  region of its own, so unmapped pairs land in a scaling curve.
+- `scaling` normalises P(s) by the genome its input declares — the chromosome
+  sizes now come from the `#chromsize:` header lines, as they do in pairtools
+  master. pairtools 1.1.x extracts them and then throws them away — `pairs_df,
+  _, _ = pairsio.read_pairs(...)`, with the sizes going into the second `_` —
+  so every region's `end` stays at the `-1` sentinel, the area each distance
+  bin covers is computed from a region one base long, and `n_bp2` (which is
+  what the pair counts are divided by to get P(s)) is meaningless: 48 in total
+  for a file whose real answer is 300000. The unmapped `!` chromosome also
+  becomes a region of its own, so unmapped pairs land in a scaling curve.
   The `n_pairs` counts are unchanged; what changes is everything they are
-  normalised by. The output is now exactly what `pairtools scaling --view <a
-  viewframe spelling out the header's chromsizes>` produces, which is what the
-  parity tests compare against. A `--view` still takes precedence, as upstream,
-  and a header that declares no sizes still gets upstream's answer. See
-  UPSTREAM.md.
+  normalised by. The output is byte-identical to `pairtools scaling` run with
+  master's `lib/scaling.py`, checked rather than assumed, and equal to
+  `pairtools scaling --view <a viewframe spelling out the header's chromsizes>`
+  on either version, which is what the parity tests compare against. A `--view`
+  still takes precedence. A header that declares no sizes falls back to the
+  sentinel regions — `pairtools scaling` cannot read such a file on any
+  version, master included. See UPSTREAM.md.
 - `-o` defaults to stdout and the input path to stdin, as they do in pairtools,
   so a pipeline needs no `-` at all:
   `select '...' in.pairs | sort | markasdup -o out.pairs`. Both were required

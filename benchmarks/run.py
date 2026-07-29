@@ -136,13 +136,13 @@ BENCHMARKS = [
     Benchmark(
         "scaling", output="tsv",
         differs_from_pairtools=(
-            "the region bounds and the `n_bp2` areas, on every row. "
-            "`pairtools scaling` extracts the header's chromosome sizes and "
-            "then discards them, so every region end stays at the -1 sentinel "
-            "and P(s) is normalised by an area computed from a negative "
-            "length. We use the sizes, which gives exactly what `pairtools "
-            "scaling --view <those sizes>` gives. The `n_pairs` counts are "
-            "identical. See UPSTREAM.md."
+            "the region bounds and the `n_bp2` areas, on every row, against "
+            "pairtools 1.1.x -- which extracts the header's chromosome sizes "
+            "and then discards them, so every region end stays at the -1 "
+            "sentinel and P(s) is normalised by the area of a region one base "
+            "long. pairtools master keeps them and so do we, byte for byte, so "
+            "this line goes away once that is released. The `n_pairs` counts "
+            "are identical either way. See UPSTREAM.md."
         ),
     ),
 ]
