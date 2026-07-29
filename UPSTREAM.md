@@ -107,6 +107,50 @@ parity. `tests/test_restrict.py` pins both our behaviour and, via
 `test_pairtools_restrict_crashes_on_missing_chromosome`, that upstream still
 crashes, so we learn when it is fixed.
 
+### `scaling` reads the chromosome sizes out of the header and then drops them
+
+`compute_scaling` takes a `chromsizes` argument, and its docstring tells you to
+"pass the header to the instream so that it can parse the header
+automatically". `cli/scaling.py`'s `--view` help says the same thing from the
+other side — "By default, this is parsed from .pairs header." It is parsed:
+
+```python
+pairs_df, _, _ = pairsio.read_pairs(pairs, nproc=nproc_in, chunksize=chunksize)
+```
+
+`read_pairs` returns `(df, header, chromsizes)` — and the chromosome sizes it
+just extracted go into `_`. `cli/scaling.py` passes no `chromsizes` either, so
+unless you give a `--view`, `bins_pairs_by_distance` falls back to taking its
+regions from the data, with every region's `end` left at the `-1` sentinel.
+
+The counts are unaffected, but everything the counts are divided by is:
+
+- `end1`/`end2` come out as `-1` on every row;
+- `contact_areas_same_reg(min_dist, max_dist, end1 - start1)` is then handed a
+  region length of `-1`, so `n_bp2` — the area each distance bin covers, which
+  is what turns pair counts into P(s) — is clipped to near zero (48 in total
+  across a whole 3-chromosome file, against 300000 for the real genome);
+- the unmapped `!` chromosome becomes a region of its own, so unmapped pairs
+  are counted into a scaling curve.
+
+Passing the header's sizes through is a one-line fix (`pairs_df, _, chromsizes =
+…`, then `chromsizes=chromsizes` at the `bins_pairs_by_distance` call).
+
+**We deliberately diverge here**: with no `--view`, `lib/scaling.py`
+here takes the chromosome sizes from the `#chromsize:` header lines. A `--view`
+still wins, as it does upstream. The result is exactly what `pairtools scaling
+--view <a viewframe spelling out the header's chromsizes>` produces, which is
+how `tests/test_scaling.py` checks parity —
+`test_chromsizes_come_from_the_header` pins the difference against a bare
+upstream run, and shows that the only rows it removes are empty bins past the
+end of a chromosome and the invented `!` region.
+
+A header that declares no sizes gets upstream's answer, because there is
+nothing better to give it. (`pairtools scaling` cannot read such a file at all:
+`read_pairs` calls `extract_chromsizes` unconditionally, which zips the parsed
+lines and indexes the result without checking there were any, so it raises
+`IndexError` instead of returning nothing.)
+
 ### `dedup` silently misses duplicates in input that is not sorted
 
 `pairtools dedup` compares pairs only within a `--chunksize` chunk plus a

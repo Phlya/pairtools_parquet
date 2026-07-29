@@ -80,7 +80,7 @@ $ pip install -e .
 
 - `stats`: summary statistics, and merging of stats files.
 
-- `scaling`: contact frequency as a function of genomic distance. Reads only the six columns the binning looks at, so Parquet input skips the rest of the file.
+- `scaling`: contact frequency as a function of genomic distance. Reads only the six columns the binning looks at, so Parquet input skips the rest of the file. Without a `--view` it normalises P(s) by the genome the header describes; `pairtools scaling` parses those chromosome sizes and then discards them, leaving `end = -1` and an `n_bp2` that no longer measures anything (see UPSTREAM.md).
 
 - `header`: `generate`, `transfer`, `set-columns` and `validate-columns`. Headers move between formats, so one generated onto a `.parquet` can be transferred onto a `.pairs` and back.
 
@@ -166,7 +166,7 @@ number, as it is when you run the command yourself.
 | `sort` | 9.1s | **3.0s** | 3.1x | identical |
 | `stats` | 14.3s | **5.1s** | 2.8x | identical |
 | `markasdup` | 13.5s | **5.1s** | 2.7x | identical |
-| `scaling` | 19.8s | **9.0s** | 2.2x | identical |
+| `scaling` | 19.8s | **9.0s** | 2.2x | counts identical § |
 | `select` | 10.2s | **6.4s** | 1.6x | identical |
 | `merge` | 5.9s | **3.3s** | 1.8x | identical ¶ |
 | `flip` | 9.6s | **6.3s** | 1.5x | identical |
@@ -186,6 +186,13 @@ was marked a duplicate of A, and C is reported unique. Our lookback holds every
 row and re-decides them, so the chain survives. It scales with density — 1 row
 per million pairs at 1M, 16 at 5.6M. `--backend scipy` reproduces pairtools
 exactly. See UPSTREAM.md.
+
+§ Also deliberate. `pairtools scaling` reads the header's chromosome sizes and
+then drops them, leaving every region's `end` at the `-1` sentinel, so the area
+each distance bin covers — the `n_bp2` column P(s) is normalised by — comes out
+of a negative region length. We use the sizes, which gives exactly what
+`pairtools scaling --view <a viewframe of those sizes>` gives. The `n_pairs`
+counts agree bin for bin. See UPSTREAM.md.
 
 ¶ `merge` is the one tool whose *text* input is slower than pairtools —
 about 7.3s against 5.9s, best of four runs each. Rows tied on all five sort

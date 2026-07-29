@@ -133,7 +133,18 @@ BENCHMARKS = [
     Benchmark("markasdup"),
     Benchmark("sample", args=lambda ctx: ["--seed", 1, 0.1]),
     Benchmark("stats", output="stats"),
-    Benchmark("scaling", output="tsv"),
+    Benchmark(
+        "scaling", output="tsv",
+        differs_from_pairtools=(
+            "the region bounds and the `n_bp2` areas, on every row. "
+            "`pairtools scaling` extracts the header's chromosome sizes and "
+            "then discards them, so every region end stays at the -1 sentinel "
+            "and P(s) is normalised by an area computed from a negative "
+            "length. We use the sizes, which gives exactly what `pairtools "
+            "scaling --view <those sizes>` gives. The `n_pairs` counts are "
+            "identical. See UPSTREAM.md."
+        ),
+    ),
 ]
 
 BY_NAME = {b.name: b for b in BENCHMARKS}
